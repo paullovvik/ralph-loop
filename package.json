@@ -1,0 +1,29 @@
+{
+  "name": "ralph-loop",
+  "version": "1.0.0",
+  "description": "Interactive PRD completion tool that iteratively calls Claude to complete complex Product Requirements Documents",
+  "main": "ralph-loop",
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": ["prd", "automation", "claude", "ai", "task-completion", "cli"],
+  "author": "Paul Lovvik",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paullovvik/ralph-loop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/paullovvik/ralph-loop/issues"
+  },
+  "homepage": "https://github.com/paullovvik/ralph-loop#readme",
+  "dependencies": {
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node"
+  }
+}

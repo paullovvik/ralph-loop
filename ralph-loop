@@ -1,0 +1,1418 @@
+#!/usr/bin/env bash
+
+# Ralph Loop - Interactive PRD Completion Tool
+# Iteratively calls Claude to complete complex PRDs one task at a time
+
+set -euo pipefail
+
+# Default values
+MAX_ITERATIONS=15
+VERBOSE=false
+DEBUG=false
+RESUME=false
+ANALYZE_PRD=false
+PRD_FILE=""
+JSON_FILE=""
+PROGRESS_FILE=""
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Usage/Help function
+show_help() {
+    cat << 'EOF'
+╔════════════════════════════════════════════════════════════════════════════╗
+║                            RALPH LOOP                                      ║
+║                   Interactive PRD Completion Tool                          ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+WHAT IS RALPH LOOP?
+
+Ralph Loop is a production-ready tool that iteratively calls Claude to complete
+complex Product Requirements Documents (PRDs) by working through tasks one at
+a time until all acceptance criteria pass. It provides zero-edit usage with a
+comprehensive help system and progress tracking.
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         QUICK START WORKFLOW                               ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+1. WRITE YOUR PRD
+   Create a markdown or JSON file with your tasks and acceptance criteria.
+   See examples/good-prd-example.md for best practices.
+
+2. RUN RALPH LOOP
+   ./ralph-loop your-prd.md
+
+3. REVIEW RESULTS
+   Check progress.txt for detailed logs and your-prd.json for final status.
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                              USAGE                                         ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Usage: ralph-loop <prd-file> [OPTIONS]
+
+REQUIRED ARGUMENTS:
+  <prd-file>              Path to PRD file (.md or .json)
+
+OPTIONS:
+  --max-iterations N      Maximum iterations to run (default: 15)
+  --verbose               Show detailed progress and API metadata
+  --debug                 Show full Claude output and internal state
+  --resume                Resume from last checkpoint in progress.txt
+  --analyze-prd           Analyze PRD quality and suggest improvements
+  --help                  Show this help message
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                             EXAMPLES                                       ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+# Basic usage - run with defaults
+./ralph-loop my-feature.md
+
+# Run with custom iteration limit
+./ralph-loop my-feature.md --max-iterations 25
+
+# Analyze PRD quality before running
+./ralph-loop my-feature.md --analyze-prd
+
+# Resume interrupted run
+./ralph-loop my-feature.md --resume
+
+# Debug mode for troubleshooting
+./ralph-loop my-feature.md --debug
+
+# Verbose output with higher iteration limit
+./ralph-loop complex-project.md --verbose --max-iterations 30
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                      PRD WRITING GUIDELINES                                ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+GOOD TASK EXAMPLE:
+  ## Task: Implement user login endpoint
+  **Category**: Backend
+  **Priority**: 1
+
+  ### Acceptance Criteria
+  - POST /api/login endpoint accepts email and password
+  - Returns JWT token on successful authentication
+  - Returns 401 status code for invalid credentials
+  - Test: curl -X POST localhost:3000/api/login with valid credentials
+  - Test: curl with invalid credentials returns proper error
+  - Password comparison uses bcrypt
+
+BAD TASK EXAMPLE:
+  ## Task: Make login work
+  **Priority**: 1
+
+  ### Acceptance Criteria
+  - Users can log in
+  - It should be secure
+
+  ❌ Too vague, no testable criteria, missing category
+
+TIPS FOR WRITING GOOD PRDSS:
+  • Be specific and testable in acceptance criteria
+  • Include actual test commands that can be run
+  • Use unique priority numbers (1, 2, 3...)
+  • Include both what AND how to verify
+  • Break large tasks into smaller ones
+  • Specify file paths and expected outputs
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         TROUBLESHOOTING                                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+PROBLEM: "PRD validation failed"
+SOLUTION: Run with --analyze-prd to get specific feedback on what's wrong.
+          Check that all tasks have required fields: title, category, priority,
+          acceptanceCriteria.
+
+PROBLEM: "Max iterations reached"
+SOLUTION: Use --resume --max-iterations 30 to continue from where you left off.
+          Consider breaking complex tasks into smaller ones.
+
+PROBLEM: "Markdown conversion failed"
+SOLUTION: Check that your markdown follows the format:
+          ## Task: [title]
+          **Category**: [category]
+          **Priority**: [number]
+          ### Acceptance Criteria
+          - criterion 1
+          - criterion 2
+
+PROBLEM: "File not found"
+SOLUTION: Check the path to your PRD file. Use absolute paths or ensure you're
+          running from the correct directory.
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         TIPS FOR SUCCESS                                   ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+• Start small - test with 2-3 tasks before running large PRDs
+• Use --analyze-prd first to validate your PRD quality
+• Include specific test commands in acceptance criteria
+• Set realistic max-iterations based on PRD complexity
+• Use --verbose to understand what's happening during execution
+• Check progress.txt regularly to see detailed logs
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         FILES CREATED                                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+  your-prd.json          Converted PRD with task status
+  progress.txt           Detailed iteration logs and learnings
+  progress-*.txt         Archived logs from previous runs
+
+EOF
+}
+
+# Error handler with contextual help
+error_exit() {
+    local error_message="$1"
+    local suggestion="${2:-}"
+
+    echo -e "${RED}ERROR: $error_message${NC}" >&2
+
+    if [ -n "$suggestion" ]; then
+        echo -e "${YELLOW}Suggestion: $suggestion${NC}" >&2
+    fi
+
+    echo -e "${YELLOW}Run './ralph-loop --help' for more information.${NC}" >&2
+    exit 1
+}
+
+# Parse command-line arguments
+parse_arguments() {
+    # Check if no arguments provided
+    if [ $# -eq 0 ]; then
+        show_help
+        exit 0
+    fi
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            --max-iterations)
+                if [ -z "${2:-}" ]; then
+                    error_exit "--max-iterations requires a numeric argument" "Example: ./ralph-loop my-prd.md --max-iterations 25"
+                fi
+                MAX_ITERATIONS="$2"
+                # Validate it's a number
+                if ! [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
+                    error_exit "--max-iterations must be a positive integer" "Example: ./ralph-loop my-prd.md --max-iterations 25"
+                fi
+                shift 2
+                ;;
+            --verbose)
+                VERBOSE=true
+                shift
+                ;;
+            --debug)
+                DEBUG=true
+                VERBOSE=true  # Debug implies verbose
+                shift
+                ;;
+            --resume)
+                RESUME=true
+                shift
+                ;;
+            --analyze-prd)
+                ANALYZE_PRD=true
+                shift
+                ;;
+            -*)
+                error_exit "Unknown option: $1" "Run './ralph-loop --help' to see all available options."
+                ;;
+            *)
+                if [ -z "$PRD_FILE" ]; then
+                    PRD_FILE="$1"
+                    shift
+                else
+                    error_exit "Multiple PRD files specified. Please provide only one." "Usage: ./ralph-loop <prd-file> [OPTIONS]"
+                fi
+                ;;
+        esac
+    done
+
+    # Validate required argument
+    if [ -z "$PRD_FILE" ]; then
+        error_exit "Required argument <prd-file> is missing" "Usage: ./ralph-loop <prd-file> [OPTIONS]
+Example: ./ralph-loop my-feature.md"
+    fi
+}
+
+# Validate PRD file exists and is readable
+validate_prd_file() {
+    if [ ! -f "$PRD_FILE" ]; then
+        error_exit "PRD file not found: $PRD_FILE" "Check the file path and ensure the file exists.
+Try using an absolute path: $(pwd)/$PRD_FILE"
+    fi
+
+    if [ ! -r "$PRD_FILE" ]; then
+        error_exit "PRD file is not readable: $PRD_FILE" "Check file permissions. Try: chmod +r '$PRD_FILE'"
+    fi
+
+    # Validate file extension
+    if [[ ! "$PRD_FILE" =~ \.(md|json)$ ]]; then
+        error_exit "PRD file must have .md or .json extension: $PRD_FILE" "Use a .md (markdown) or .json file for your PRD."
+    fi
+}
+
+# Convert markdown PRD to JSON format
+convert_prd_to_json() {
+    local prd_dir=$(dirname "$PRD_FILE")
+    local prd_basename=$(basename "$PRD_FILE")
+    local prd_name="${prd_basename%.*}"
+    local json_file="${prd_dir}/${prd_name}.json"
+
+    # If input is already JSON, just set JSON_FILE and return
+    if [[ "$PRD_FILE" =~ \.json$ ]]; then
+        JSON_FILE="$PRD_FILE"
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Input is already JSON format: $JSON_FILE${NC}"
+        fi
+        return 0
+    fi
+
+    # Check if JSON already exists
+    if [ -f "$json_file" ]; then
+        JSON_FILE="$json_file"
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Using existing JSON file: $JSON_FILE${NC}"
+        fi
+        return 0
+    fi
+
+    echo -e "${BLUE}Converting markdown to JSON...${NC}"
+
+    # Parse markdown file
+    local in_task=false
+    local in_criteria=false
+    local task_count=0
+    local current_task_title=""
+    local current_task_category=""
+    local current_task_priority=""
+    local current_task_description=""
+    local current_criteria=()
+
+    # Start building JSON
+    local json_content='{'
+    json_content+='"title": "Converted PRD",'
+    json_content+='"overview": "Converted from markdown",'
+    json_content+='"projectDirectory": "'$(pwd)'",'
+    json_content+='"tasks": ['
+
+    local first_task=true
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Check for task header
+        if [[ "$line" =~ ^##[[:space:]]+Task:[[:space:]]*(.+)$ ]]; then
+            # Save previous task if exists
+            if [ "$in_task" = true ] && [ -n "$current_task_title" ]; then
+                if [ "$first_task" = false ]; then
+                    json_content+=','
+                fi
+                first_task=false
+
+                task_count=$((task_count + 1))
+                json_content+='{"id": "task-'$task_count'",'
+                json_content+='"title": "'"${current_task_title//\"/\\\"}"'",'
+                json_content+='"category": "'"${current_task_category:-Uncategorized}"'",'
+                json_content+='"priority": '${current_task_priority:-999}','
+                json_content+='"description": "'"${current_task_description//\"/\\\"}"'",'
+                json_content+='"acceptanceCriteria": ['
+
+                local first_criteria=true
+                for criteria in "${current_criteria[@]}"; do
+                    if [ "$first_criteria" = false ]; then
+                        json_content+=','
+                    fi
+                    first_criteria=false
+                    json_content+='"'"${criteria//\"/\\\"}"'"'
+                done
+
+                json_content+='],'
+                json_content+='"passes": false,'
+                json_content+='"completedAt": null,'
+                json_content+='"attempts": 0}'
+            fi
+
+            # Start new task
+            in_task=true
+            in_criteria=false
+            current_task_title="${BASH_REMATCH[1]}"
+            current_task_category=""
+            current_task_priority=""
+            current_task_description=""
+            current_criteria=()
+
+        # Check for Category
+        elif [[ "$line" =~ ^\*\*Category\*\*:[[:space:]]*(.+)$ ]]; then
+            current_task_category="${BASH_REMATCH[1]}"
+
+        # Check for Priority
+        elif [[ "$line" =~ ^\*\*Priority\*\*:[[:space:]]*([0-9]+)$ ]]; then
+            current_task_priority="${BASH_REMATCH[1]}"
+
+        # Check for Acceptance Criteria header
+        elif [[ "$line" =~ ^###[[:space:]]+Acceptance[[:space:]]+Criteria ]]; then
+            in_criteria=true
+
+        # Check for criteria items
+        elif [ "$in_criteria" = true ] && [[ "$line" =~ ^-[[:space:]]*(.+)$ ]]; then
+            current_criteria+=("${BASH_REMATCH[1]}")
+
+        # Check if we're leaving the criteria section
+        elif [ "$in_criteria" = true ] && [[ "$line" =~ ^[[:space:]]*$ ]]; then
+            in_criteria=false
+
+        # Collect description text (non-empty lines before acceptance criteria)
+        elif [ "$in_task" = true ] && [ "$in_criteria" = false ] && [[ ! "$line" =~ ^[[:space:]]*$ ]] && [[ ! "$line" =~ ^\*\* ]]; then
+            if [ -n "$current_task_description" ]; then
+                current_task_description+=" "
+            fi
+            current_task_description+="$line"
+        fi
+    done < "$PRD_FILE"
+
+    # Save last task
+    if [ "$in_task" = true ] && [ -n "$current_task_title" ]; then
+        if [ "$first_task" = false ]; then
+            json_content+=','
+        fi
+
+        task_count=$((task_count + 1))
+        json_content+='{"id": "task-'$task_count'",'
+        json_content+='"title": "'"${current_task_title//\"/\\\"}"'",'
+        json_content+='"category": "'"${current_task_category:-Uncategorized}"'",'
+        json_content+='"priority": '${current_task_priority:-999}','
+        json_content+='"description": "'"${current_task_description//\"/\\\"}"'",'
+        json_content+='"acceptanceCriteria": ['
+
+        local first_criteria=true
+        for criteria in "${current_criteria[@]}"; do
+            if [ "$first_criteria" = false ]; then
+                json_content+=','
+            fi
+            first_criteria=false
+            json_content+='"'"${criteria//\"/\\\"}"'"'
+        done
+
+        json_content+='],'
+        json_content+='"passes": false,'
+        json_content+='"completedAt": null,'
+        json_content+='"attempts": 0}'
+    fi
+
+    # Close tasks array and add metadata
+    json_content+='],'
+    json_content+='"metadata": {'
+    json_content+='"createdAt": "'$(date +%Y-%m-%d)'",'
+    json_content+='"totalTasks": '$task_count
+    json_content+='}'
+    json_content+='}'
+
+    # Format JSON nicely using jq if available, otherwise just save it
+    if command -v jq &> /dev/null; then
+        if ! echo "$json_content" | jq '.' > "$json_file" 2>/dev/null; then
+            error_exit "Failed to convert markdown to JSON - invalid JSON generated" "Check your markdown format. Each task should follow:
+## Task: [title]
+**Category**: [category]
+**Priority**: [number]
+### Acceptance Criteria
+- criterion 1
+- criterion 2"
+        fi
+    else
+        echo "$json_content" > "$json_file"
+    fi
+
+    if [ $? -eq 0 ]; then
+        JSON_FILE="$json_file"
+        echo -e "${GREEN}✓${NC} Converted markdown to JSON: $JSON_FILE"
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Parsed $task_count tasks${NC}"
+        fi
+    else
+        error_exit "Failed to write JSON file: $json_file" "Check that you have write permissions in the directory: $(dirname "$json_file")
+Try: chmod +w '$(dirname "$json_file")'"
+    fi
+}
+
+# Validate PRD JSON structure and content
+validate_prd_json() {
+    local json_file="$1"
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${BLUE}[INFO] Validating PRD JSON structure...${NC}"
+    fi
+
+    # Check if jq is available
+    if ! command -v jq &> /dev/null; then
+        error_exit "jq is required for PRD validation. Please install jq." "Install jq:
+- macOS: brew install jq
+- Ubuntu/Debian: sudo apt-get install jq
+- Fedora: sudo dnf install jq"
+    fi
+
+    # Validate top-level required fields
+    local has_title=$(jq -e 'has("title")' "$json_file" 2>/dev/null)
+    if [ "$has_title" != "true" ]; then
+        error_exit "PRD validation failed: Missing required field 'title'" "Add a 'title' field at the top level of your JSON file.
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+    fi
+
+    local has_tasks=$(jq -e 'has("tasks")' "$json_file" 2>/dev/null)
+    if [ "$has_tasks" != "true" ]; then
+        error_exit "PRD validation failed: Missing required field 'tasks'" "Add a 'tasks' array at the top level of your JSON file.
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+    fi
+
+    local tasks_is_array=$(jq -e '.tasks | type == "array"' "$json_file" 2>/dev/null)
+    if [ "$tasks_is_array" != "true" ]; then
+        error_exit "PRD validation failed: 'tasks' must be an array" "Ensure your 'tasks' field is a JSON array: \"tasks\": [...]"
+    fi
+
+    # Get task count
+    local task_count=$(jq '.tasks | length' "$json_file")
+    if [ "$task_count" -eq 0 ]; then
+        error_exit "PRD validation failed: No tasks found in PRD" "Add at least one task to your PRD."
+    fi
+
+    # Validate each task has required fields
+    local task_index=0
+    local priorities=()
+
+    while [ $task_index -lt $task_count ]; do
+        local task=$(jq ".tasks[$task_index]" "$json_file")
+        local task_id=$(echo "$task" | jq -r '.id // "unknown"')
+
+        # Check required fields
+        local required_fields=("id" "title" "category" "priority" "acceptanceCriteria" "passes")
+        for field in "${required_fields[@]}"; do
+            local has_field=$(echo "$task" | jq -e "has(\"$field\")" 2>/dev/null)
+            if [ "$has_field" != "true" ]; then
+                error_exit "PRD validation failed: Task '$task_id' (index $task_index) is missing required field '$field'" "Add the '$field' field to task '$task_id'.
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+            fi
+        done
+
+        # Validate priority is an integer
+        local priority=$(echo "$task" | jq '.priority')
+        if ! [[ "$priority" =~ ^[0-9]+$ ]]; then
+            error_exit "PRD validation failed: Task '$task_id' has invalid priority value: $priority" "Priority must be a positive integer (e.g., 1, 2, 3...).
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+        fi
+
+        # Check for duplicate priorities
+        if [[ " ${priorities[@]} " =~ " ${priority} " ]]; then
+            error_exit "PRD validation failed: Duplicate priority value found: $priority" "Each task must have a unique priority number.
+Task '$task_id' has the same priority as another task.
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+        fi
+        priorities+=("$priority")
+
+        # Validate acceptanceCriteria is a non-empty array
+        local criteria_is_array=$(echo "$task" | jq -e '.acceptanceCriteria | type == "array"' 2>/dev/null)
+        if [ "$criteria_is_array" != "true" ]; then
+            error_exit "PRD validation failed: Task '$task_id' acceptanceCriteria must be an array" "Ensure acceptanceCriteria is a JSON array: \"acceptanceCriteria\": [...]"
+        fi
+
+        local criteria_count=$(echo "$task" | jq '.acceptanceCriteria | length')
+        if [ "$criteria_count" -eq 0 ]; then
+            error_exit "PRD validation failed: Task '$task_id' has empty acceptanceCriteria array" "Add at least one acceptance criterion to task '$task_id'.
+Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
+        fi
+
+        task_index=$((task_index + 1))
+    done
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${GREEN}✓${NC} PRD validation passed: $task_count tasks validated"
+    fi
+
+    return 0
+}
+
+# Analyze PRD quality using Claude API
+analyze_prd() {
+    local json_file="$1"
+
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║                         PRD QUALITY ANALYSIS                               ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # First run structural validation
+    echo -e "${BLUE}Running structural validation...${NC}"
+    if ! validate_prd_json "$json_file"; then
+        error_exit "Structural validation failed. Fix validation errors before analyzing PRD quality." "Address the validation errors above and try again."
+    fi
+    echo -e "${GREEN}✓${NC} Structural validation passed"
+    echo ""
+
+    # Read PRD content
+    local prd_content=$(cat "$json_file")
+
+    # Get statistics
+    local task_count=$(echo "$prd_content" | jq '.tasks | length')
+    local categories=$(echo "$prd_content" | jq -r '.tasks[].category' | sort | uniq -c | awk '{print "  - " $2 ": " $1 " task(s)"}')
+    local avg_criteria=$(echo "$prd_content" | jq '[.tasks[].acceptanceCriteria | length] | add / length | floor')
+
+    echo -e "${BLUE}PRD Statistics:${NC}"
+    echo "  Total Tasks: $task_count"
+    echo "  Categories:"
+    echo "$categories"
+    echo "  Average Acceptance Criteria per Task: $avg_criteria"
+    echo ""
+
+    # Create analysis prompt for Claude
+    local analysis_prompt="You are a PRD quality analyzer. Analyze the following Product Requirements Document (PRD) and provide detailed feedback on its quality.
+
+PRD Content:
+$prd_content
+
+Please provide:
+
+1. OVERALL QUALITY ASSESSMENT (1-2 sentences summary)
+
+2. TASK-BY-TASK ANALYSIS
+   For each task, provide:
+   - Task ID and Title
+   - What's Good: Specific positive aspects
+   - Concerns/Improvements: Areas that need work (if any)
+   - Quality Rating: Excellent/Good/Needs Work
+
+3. COMMON ISSUES FOUND (if any)
+   - Vague acceptance criteria
+   - Missing test commands
+   - Unclear dependencies
+   - Priority ordering problems
+   - Missing categories or metadata
+
+4. RECOMMENDATIONS
+   - Specific improvements to make
+   - Suggestions for better acceptance criteria
+   - Tips for making tasks more testable
+
+Be constructive and specific. Focus on actionable feedback."
+
+    echo -e "${BLUE}Analyzing PRD quality with Claude...${NC}"
+    echo ""
+
+    # Create temporary file for prompt
+    local prompt_file=$(mktemp)
+    echo "$analysis_prompt" > "$prompt_file"
+
+    # Call Claude CLI
+    # Check if claude CLI is available
+    if ! command -v claude &> /dev/null; then
+        rm -f "$prompt_file"
+        error_exit "Claude CLI is not available. Please install the Claude CLI to use --analyze-prd." "Visit https://docs.anthropic.com/claude/docs/claude-cli for installation instructions."
+    fi
+
+    # Run Claude analysis with retry logic
+    local claude_output
+    local max_retries=3
+    local retry_count=0
+    local retry_delay=5
+
+    while [ $retry_count -lt $max_retries ]; do
+        if claude_output=$(claude -p "$(cat "$prompt_file")" 2>&1); then
+            echo "$claude_output"
+            echo ""
+            echo -e "${GREEN}═══════════════════════════════════════════════════════════════════════════${NC}"
+            echo -e "${GREEN}Analysis complete!${NC}"
+            echo -e "${YELLOW}Review the feedback above and consider improving your PRD before running the loop.${NC}"
+            rm -f "$prompt_file"
+            exit 0
+        else
+            retry_count=$((retry_count + 1))
+
+            # Check for rate limit or network errors
+            if echo "$claude_output" | grep -iq "rate limit\|429\|quota"; then
+                if [ $retry_count -lt $max_retries ]; then
+                    echo -e "${YELLOW}API rate limit reached. Waiting ${retry_delay} seconds before retry ${retry_count}/${max_retries}...${NC}" >&2
+                    sleep $retry_delay
+                    retry_delay=$((retry_delay * 2))  # Exponential backoff
+                fi
+            elif echo "$claude_output" | grep -iq "network\|connection\|timeout"; then
+                if [ $retry_count -lt $max_retries ]; then
+                    echo -e "${YELLOW}Network error. Retrying ${retry_count}/${max_retries}...${NC}" >&2
+                    sleep $retry_delay
+                fi
+            else
+                # Other errors don't retry
+                break
+            fi
+        fi
+    done
+
+    # If we got here, all retries failed
+    rm -f "$prompt_file"
+    error_exit "Claude API call failed after ${retry_count} attempt(s)." "Check your API key and network connection.
+Error output: $claude_output"
+}
+
+# Get last completed iteration from progress file
+get_last_iteration() {
+    local progress_file="$1"
+
+    if [ ! -f "$progress_file" ]; then
+        echo "0"
+        return
+    fi
+
+    # Look for iteration markers in progress file
+    # Format: │ ITERATION N/MAX
+    local last_iteration=$(grep -o "ITERATION [0-9]\+/" "$progress_file" | tail -1 | grep -o "[0-9]\+" || echo "")
+
+    if [ -z "$last_iteration" ]; then
+        echo "0"
+    else
+        echo "$last_iteration"
+    fi
+}
+
+# Prompt user for resume or fresh start
+prompt_resume_or_fresh() {
+    local prd_dir=$(dirname "$JSON_FILE")
+    local progress_file="${prd_dir}/progress.txt"
+
+    echo ""
+    echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║                   EXISTING PROGRESS DETECTED                               ║${NC}"
+    echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo "An existing progress file was found at:"
+    echo "  $progress_file"
+    echo ""
+
+    local last_iteration=$(get_last_iteration "$progress_file")
+    local completed_count=$(jq '[.tasks[] | select(.passes == true)] | length' "$JSON_FILE")
+    local total_count=$(jq '.tasks | length' "$JSON_FILE")
+
+    echo "Last completed iteration: $last_iteration"
+    echo "Tasks completed: $completed_count / $total_count"
+    echo ""
+    echo "What would you like to do?"
+    echo "  [R] Resume from where you left off (continue from iteration $((last_iteration + 1)))"
+    echo "  [F] Fresh start (archive existing progress and start from iteration 1)"
+    echo ""
+    read -p "Enter choice (R/F): " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Rr]$ ]]; then
+        RESUME=true
+        echo -e "${GREEN}Resuming from iteration $((last_iteration + 1))${NC}"
+        return 0
+    elif [[ $REPLY =~ ^[Ff]$ ]]; then
+        RESUME=false
+        echo -e "${BLUE}Starting fresh run${NC}"
+        return 0
+    else
+        error_exit "Invalid choice. Please enter R or F." "Press R to resume or F to start fresh."
+    fi
+}
+
+# Initialize progress file
+initialize_progress_file() {
+    local prd_dir=$(dirname "$JSON_FILE")
+    local progress_file="${prd_dir}/progress.txt"
+
+    # If progress file exists and resume flag not specified, prompt user
+    if [ -f "$progress_file" ] && [ "$RESUME" = false ]; then
+        # Check if there's actual progress in the file (not just a header)
+        local has_iterations=$(grep -q "ITERATION" "$progress_file" && echo "true" || echo "false")
+
+        if [ "$has_iterations" = "true" ]; then
+            prompt_resume_or_fresh
+        fi
+    fi
+
+    # If not resuming, archive existing progress file
+    if [ -f "$progress_file" ] && [ "$RESUME" = false ]; then
+        local timestamp=$(date +%Y%m%d-%H%M%S)
+        local archive_file="${prd_dir}/progress-${timestamp}.txt"
+        mv "$progress_file" "$archive_file"
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Archived existing progress file to: $archive_file${NC}"
+        fi
+    fi
+
+    # Create progress file if it doesn't exist
+    if [ ! -f "$progress_file" ]; then
+        cat > "$progress_file" << EOF
+╔════════════════════════════════════════════════════════════════════════════╗
+║                         RALPH LOOP PROGRESS LOG                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Start Time: $(date '+%Y-%m-%d %H:%M:%S')
+PRD Path: $JSON_FILE
+Max Iterations: $MAX_ITERATIONS
+
+════════════════════════════════════════════════════════════════════════════
+
+EOF
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${GREEN}✓${NC} Created progress file: $progress_file"
+        fi
+    elif [ "$RESUME" = true ]; then
+        # Show resume summary
+        local last_iteration=$(get_last_iteration "$progress_file")
+        local completed_count=$(jq '[.tasks[] | select(.passes == true)] | length' "$JSON_FILE")
+        local total_count=$(jq '.tasks | length' "$JSON_FILE")
+
+        echo ""
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║                         RESUMING RALPH LOOP                                ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo "Resume Summary:"
+        echo "  Last completed iteration: $last_iteration"
+        echo "  Tasks completed: $completed_count / $total_count"
+        echo "  Continuing from iteration: $((last_iteration + 1))"
+        echo ""
+
+        # Append resume marker
+        cat >> "$progress_file" << EOF
+
+════════════════════════════════════════════════════════════════════════════
+RESUMED SESSION
+Resume Time: $(date '+%Y-%m-%d %H:%M:%S')
+Continuing from iteration: $((last_iteration + 1))
+════════════════════════════════════════════════════════════════════════════
+
+EOF
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${GREEN}✓${NC} Resuming with existing progress file: $progress_file"
+        fi
+    fi
+
+    # Store progress file path globally
+    PROGRESS_FILE="$progress_file"
+}
+
+# Log iteration to progress file
+log_iteration() {
+    local iteration="$1"
+    local task_id="$2"
+    local task_title="$3"
+
+    cat >> "$PROGRESS_FILE" << EOF
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ITERATION $iteration/$MAX_ITERATIONS
+│ Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
+│ Working on: $task_id - $task_title
+└────────────────────────────────────────────────────────────────────────────┘
+
+EOF
+}
+
+# Log iteration result to progress file
+log_iteration_result() {
+    local iteration="$1"
+    local task_id="$2"
+    local status="$3"
+    local details="$4"
+
+    cat >> "$PROGRESS_FILE" << EOF
+Result: $status
+Details: $details
+
+EOF
+}
+
+# Log learnings to progress file
+log_learnings() {
+    local learnings="$1"
+
+    cat >> "$PROGRESS_FILE" << EOF
+Learnings:
+$learnings
+
+════════════════════════════════════════════════════════════════════════════
+
+EOF
+}
+
+# Log completion to progress file
+log_completion() {
+    local total_iterations="$1"
+    local success="$2"
+
+    if [ "$success" = true ]; then
+        cat >> "$PROGRESS_FILE" << EOF
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                           COMPLETION SUCCESSFUL                            ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+Completion Time: $(date '+%Y-%m-%d %H:%M:%S')
+Total Iterations: $total_iterations
+Status: ALL TASKS COMPLETED ✓
+
+All acceptance criteria have been satisfied.
+PRD JSON updated with final status.
+
+EOF
+    else
+        cat >> "$PROGRESS_FILE" << EOF
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                        MAX ITERATIONS REACHED                              ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+End Time: $(date '+%Y-%m-%d %H:%M:%S')
+Total Iterations: $total_iterations
+Status: INCOMPLETE
+
+Some tasks remain incomplete. Use --resume to continue.
+
+EOF
+    fi
+}
+
+# Display real-time progress visualization
+show_progress() {
+    local iteration="$1"
+    local start_time="$2"
+
+    # Read current PRD state
+    local prd_content=$(cat "$JSON_FILE")
+    local total_tasks=$(echo "$prd_content" | jq '.tasks | length')
+    local completed_tasks=$(echo "$prd_content" | jq '[.tasks[] | select(.passes == true)] | length')
+    local completion_percentage=$((completed_tasks * 100 / total_tasks))
+
+    # Calculate elapsed time
+    local current_time=$(date +%s)
+    local elapsed_seconds=$((current_time - start_time))
+    local elapsed_minutes=$((elapsed_seconds / 60))
+    local elapsed_seconds_remainder=$((elapsed_seconds % 60))
+    local elapsed_time=$(printf "%02d:%02d" $elapsed_minutes $elapsed_seconds_remainder)
+
+    # Print progress box
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════════════════════╗"
+    echo "║                          RALPH LOOP PROGRESS                               ║"
+    echo "╚════════════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    printf "  Iteration: %d/%d\n" $iteration $MAX_ITERATIONS
+    printf "  Completed: %d/%d tasks (%d%%)\n" $completed_tasks $total_tasks $completion_percentage
+    printf "  Elapsed Time: %s\n" $elapsed_time
+    echo ""
+    echo "┌────────────────────────────────────────────────────────────────────────────┐"
+    echo "│ Task Status                                                                │"
+    echo "└────────────────────────────────────────────────────────────────────────────┘"
+
+    # List all tasks with status indicators
+    local task_index=0
+    while [ $task_index -lt $total_tasks ]; do
+        local task=$(echo "$prd_content" | jq ".tasks[$task_index]")
+        local task_id=$(echo "$task" | jq -r '.id')
+        local task_title=$(echo "$task" | jq -r '.title')
+        local task_passes=$(echo "$task" | jq -r '.passes')
+        local task_attempts=$(echo "$task" | jq -r '.attempts // 0')
+
+        # Determine status icon
+        local status_icon
+        if [ "$task_passes" = "true" ]; then
+            status_icon="✅"
+        elif [ "$task_attempts" -gt 0 ]; then
+            status_icon="🔄"
+        else
+            status_icon="⏳"
+        fi
+
+        # Truncate title if too long (to fit 80 columns)
+        local max_title_length=58
+        if [ ${#task_title} -gt $max_title_length ]; then
+            task_title="${task_title:0:$((max_title_length-3))}..."
+        fi
+
+        printf "  %s %s: %s\n" "$status_icon" "$task_id" "$task_title"
+
+        task_index=$((task_index + 1))
+    done
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════════════════"
+    echo ""
+}
+
+# Find highest-priority incomplete task
+find_next_task() {
+    local prd_content=$(cat "$JSON_FILE")
+    local task_count=$(echo "$prd_content" | jq '.tasks | length')
+    local task_index=0
+    local highest_priority_task=""
+    local highest_priority=999999
+
+    while [ $task_index -lt $task_count ]; do
+        local task=$(echo "$prd_content" | jq ".tasks[$task_index]")
+        local task_passes=$(echo "$task" | jq -r '.passes')
+        local task_priority=$(echo "$task" | jq -r '.priority')
+
+        if [ "$task_passes" = "false" ] && [ "$task_priority" -lt "$highest_priority" ]; then
+            highest_priority=$task_priority
+            highest_priority_task=$(echo "$task" | jq -r '.id')
+        fi
+
+        task_index=$((task_index + 1))
+    done
+
+    echo "$highest_priority_task"
+}
+
+# Get task details by ID
+get_task_details() {
+    local task_id="$1"
+    local prd_content=$(cat "$JSON_FILE")
+    echo "$prd_content" | jq -r ".tasks[] | select(.id == \"$task_id\")"
+}
+
+# Update task attempts counter
+update_task_attempts() {
+    local task_id="$1"
+    local prd_content=$(cat "$JSON_FILE")
+    local task_index=$(echo "$prd_content" | jq ".tasks | map(.id) | index(\"$task_id\")")
+    local current_attempts=$(echo "$prd_content" | jq ".tasks[$task_index].attempts // 0")
+    local new_attempts=$((current_attempts + 1))
+
+    # Update the attempts field
+    local updated_prd=$(echo "$prd_content" | jq ".tasks[$task_index].attempts = $new_attempts")
+    echo "$updated_prd" > "$JSON_FILE"
+
+    if [ "$DEBUG" = true ]; then
+        echo -e "${BLUE}[DEBUG] Updated task $task_id attempts to $new_attempts${NC}"
+    fi
+}
+
+# Run the main Ralph Loop
+run_ralph_loop() {
+    echo ""
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║                        STARTING RALPH LOOP                                 ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    # Check if claude CLI is available
+    if ! command -v claude &> /dev/null; then
+        error_exit "Claude CLI is not available. Please install the Claude CLI to run Ralph Loop." "Visit https://docs.anthropic.com/claude/docs/claude-cli for installation instructions."
+    fi
+
+    local start_time=$(date +%s)
+    local iteration=1
+
+    # If resuming, start from last iteration + 1
+    if [ "$RESUME" = true ]; then
+        local last_iteration=$(get_last_iteration "$PROGRESS_FILE")
+        iteration=$((last_iteration + 1))
+
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Resuming from iteration $iteration${NC}"
+        fi
+
+        # Check if we've already exceeded max iterations
+        if [ $iteration -gt $MAX_ITERATIONS ]; then
+            error_exit "Cannot resume: last iteration ($last_iteration) already at or exceeds max iterations ($MAX_ITERATIONS)." "Use --max-iterations with a higher value, e.g.:
+  ./ralph-loop $PRD_FILE --resume --max-iterations $((last_iteration + 10))"
+        fi
+    fi
+
+    local completion_detected=false
+
+    # Main iteration loop
+    while [ $iteration -le $MAX_ITERATIONS ]; do
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Starting iteration $iteration/$MAX_ITERATIONS${NC}"
+        fi
+
+        # Find next task to work on
+        local next_task_id=$(find_next_task)
+
+        if [ -z "$next_task_id" ]; then
+            # All tasks complete!
+            if [ "$VERBOSE" = true ]; then
+                echo -e "${GREEN}[INFO] All tasks completed!${NC}"
+            fi
+            completion_detected=true
+            break
+        fi
+
+        local task_details=$(get_task_details "$next_task_id")
+        local task_title=$(echo "$task_details" | jq -r '.title')
+
+        # Update task attempts
+        update_task_attempts "$next_task_id"
+
+        # Log iteration start
+        log_iteration "$iteration" "$next_task_id" "$task_title"
+
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Working on: $next_task_id - $task_title${NC}"
+        fi
+
+        # Generate Claude prompt
+        local claude_prompt="1. Read $JSON_FILE to find the highest-priority failing task.
+2. Work only on that single task.
+3. Run tests to verify the fix.
+4. Update $JSON_FILE (set passes: true) and log learnings to $PROGRESS_FILE
+5. Output \"<promise>COMPLETE</promise>\" only when all PRD tasks pass."
+
+        if [ "$DEBUG" = true ]; then
+            echo -e "${BLUE}[DEBUG] Claude prompt:${NC}"
+            echo "$claude_prompt"
+            echo ""
+        fi
+
+        # Create temporary file for prompt
+        local prompt_file=$(mktemp)
+        echo "$claude_prompt" > "$prompt_file"
+
+        # Call Claude CLI
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] Calling Claude API...${NC}"
+        fi
+
+        local claude_output
+        local claude_exit_code=0
+        local max_retries=3
+        local retry_count=0
+        local retry_delay=5
+        local api_success=false
+
+        # Run claude with appropriate flags
+        local api_start_time=$(date +%s)
+
+        # Retry loop for API calls
+        while [ $retry_count -lt $max_retries ] && [ "$api_success" = false ]; do
+            if [ $retry_count -gt 0 ]; then
+                echo -e "${YELLOW}Retrying API call (attempt $((retry_count + 1))/$max_retries)...${NC}"
+            fi
+
+            if [ "$DEBUG" = true ]; then
+                if [ $retry_count -eq 0 ]; then
+                    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+                    echo -e "${BLUE}║                          DEBUG: API REQUEST                                ║${NC}"
+                    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+                    echo -e "${BLUE}[DEBUG] Prompt being sent to Claude:${NC}"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo "$claude_prompt"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo ""
+                fi
+                echo -e "${BLUE}[DEBUG] Calling Claude API...${NC}"
+                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                    api_success=true
+                    echo ""
+                    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+                    echo -e "${BLUE}║                         DEBUG: API RESPONSE                                ║${NC}"
+                    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+                    echo -e "${BLUE}[DEBUG] Full Claude output:${NC}"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo "$claude_output"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo ""
+                else
+                    claude_exit_code=$?
+                fi
+            elif [ "$VERBOSE" = true ]; then
+                if [ $retry_count -eq 0 ]; then
+                    echo -e "${BLUE}[VERBOSE] Prompt being sent to Claude:${NC}"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo "$claude_prompt"
+                    echo "────────────────────────────────────────────────────────────────────────────"
+                    echo ""
+                fi
+                echo -e "${BLUE}[VERBOSE] Calling Claude API...${NC}"
+                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                    api_success=true
+                    echo -e "${GREEN}[VERBOSE] Claude API call completed${NC}"
+                else
+                    claude_exit_code=$?
+                fi
+            else
+                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                    api_success=true
+                else
+                    claude_exit_code=$?
+                fi
+            fi
+
+            # If API call failed, check for retryable errors
+            if [ "$api_success" = false ]; then
+                retry_count=$((retry_count + 1))
+
+                # Check for rate limit errors
+                if echo "$claude_output" | grep -iq "rate limit\|429\|quota"; then
+                    if [ $retry_count -lt $max_retries ]; then
+                        echo -e "${YELLOW}⚠ API rate limit reached. Waiting ${retry_delay} seconds before retry...${NC}"
+                        sleep $retry_delay
+                        retry_delay=$((retry_delay * 2))  # Exponential backoff
+                    fi
+                # Check for network errors
+                elif echo "$claude_output" | grep -iq "network\|connection\|timeout\|refused"; then
+                    if [ $retry_count -lt $max_retries ]; then
+                        echo -e "${YELLOW}⚠ Network error detected. Retrying in ${retry_delay} seconds...${NC}"
+                        sleep $retry_delay
+                    fi
+                else
+                    # Non-retryable error, exit immediately
+                    rm -f "$prompt_file"
+                    error_exit "Claude API call failed (non-retryable error)." "Error details:
+$claude_output
+
+Check your API key and Claude CLI configuration."
+                fi
+
+                # If we've exhausted retries
+                if [ $retry_count -ge $max_retries ]; then
+                    rm -f "$prompt_file"
+                    error_exit "Claude API call failed after $max_retries attempts." "Error details:
+$claude_output
+
+This could be due to:
+- Rate limiting (wait and try again)
+- Network connectivity issues
+- API service outage
+- Invalid API key
+
+Try again later or check Claude API status at https://status.anthropic.com"
+                fi
+            fi
+        done
+
+        local api_end_time=$(date +%s)
+        local api_duration=$((api_end_time - api_start_time))
+
+        rm -f "$prompt_file"
+
+        # Show API metadata in verbose/debug mode
+        if [ "$VERBOSE" = true ] || [ "$DEBUG" = true ]; then
+            echo ""
+            echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${BLUE}║                          API METADATA                                      ║${NC}"
+            echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "${BLUE}[METADATA] API Call Duration: ${api_duration} seconds${NC}"
+
+            # Extract token usage if present in output (Claude CLI may include this)
+            local token_info=$(echo "$claude_output" | grep -i "token" | head -1 || echo "")
+            if [ -n "$token_info" ]; then
+                echo -e "${BLUE}[METADATA] Token Usage: $token_info${NC}"
+            fi
+
+            # Show output size
+            local output_size=$(echo "$claude_output" | wc -c | tr -d ' ')
+            echo -e "${BLUE}[METADATA] Response Size: $output_size bytes${NC}"
+
+            # Show exit code
+            echo -e "${BLUE}[METADATA] Exit Code: ${claude_exit_code:-0}${NC}"
+            echo ""
+        fi
+
+        # Show internal state in debug mode
+        if [ "$DEBUG" = true ]; then
+            echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${BLUE}║                        DEBUG: INTERNAL STATE                               ║${NC}"
+            echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "${BLUE}[DEBUG] Current Iteration: $iteration${NC}"
+            echo -e "${BLUE}[DEBUG] Max Iterations: $MAX_ITERATIONS${NC}"
+            echo -e "${BLUE}[DEBUG] Working on Task: $next_task_id${NC}"
+            echo -e "${BLUE}[DEBUG] Task Title: $task_title${NC}"
+            echo -e "${BLUE}[DEBUG] Progress File: $PROGRESS_FILE${NC}"
+            echo -e "${BLUE}[DEBUG] JSON File: $JSON_FILE${NC}"
+
+            # Show current task statistics
+            local completed_count=$(jq '[.tasks[] | select(.passes == true)] | length' "$JSON_FILE")
+            local total_count=$(jq '.tasks | length' "$JSON_FILE")
+            local in_progress_count=$(jq '[.tasks[] | select(.attempts > 0 and .passes == false)] | length' "$JSON_FILE")
+
+            echo -e "${BLUE}[DEBUG] Tasks Completed: $completed_count / $total_count${NC}"
+            echo -e "${BLUE}[DEBUG] Tasks In Progress: $in_progress_count${NC}"
+            echo -e "${BLUE}[DEBUG] Tasks Pending: $((total_count - completed_count - in_progress_count))${NC}"
+            echo ""
+        fi
+
+        # Check for completion promise
+        if echo "$claude_output" | grep -q "<promise>COMPLETE</promise>"; then
+            if [ "$VERBOSE" = true ]; then
+                echo -e "${GREEN}[INFO] Completion promise detected! Verifying all tasks...${NC}"
+            fi
+
+            # Verify that all tasks actually have passes=true
+            local all_tasks_passed=$(jq '[.tasks[] | select(.passes == false)] | length' "$JSON_FILE")
+
+            if [ "$all_tasks_passed" -eq 0 ]; then
+                # All tasks genuinely complete
+                completion_detected=true
+                log_iteration_result "$iteration" "$next_task_id" "COMPLETE" "All tasks passed"
+                log_learnings "All PRD tasks have been completed successfully."
+
+                if [ "$VERBOSE" = true ]; then
+                    echo -e "${GREEN}[INFO] Verification passed: All tasks completed!${NC}"
+                fi
+                break
+            else
+                # Some tasks still incomplete despite promise
+                if [ "$VERBOSE" = true ]; then
+                    echo -e "${YELLOW}[WARNING] Completion promise detected but $all_tasks_passed tasks still incomplete. Continuing...${NC}"
+                fi
+                log_iteration_result "$iteration" "$next_task_id" "IN PROGRESS" "Completion promise detected but tasks remain incomplete"
+            fi
+        fi
+
+        # Read updated PRD to check task status
+        local updated_task=$(get_task_details "$next_task_id")
+        local task_passes=$(echo "$updated_task" | jq -r '.passes')
+
+        if [ "$task_passes" = "true" ]; then
+            log_iteration_result "$iteration" "$next_task_id" "PASSED" "Task completed successfully"
+        else
+            log_iteration_result "$iteration" "$next_task_id" "IN PROGRESS" "Task still being worked on"
+        fi
+
+        # Show progress visualization
+        show_progress "$iteration" "$start_time"
+
+        # Increment iteration
+        iteration=$((iteration + 1))
+
+        # Add delay between iterations to prevent rate limits
+        if [ $iteration -le $MAX_ITERATIONS ] && [ "$completion_detected" = false ]; then
+            if [ "$VERBOSE" = true ]; then
+                echo -e "${BLUE}[INFO] Waiting 2 seconds before next iteration...${NC}"
+            fi
+            sleep 2
+        fi
+    done
+
+    # Final status
+    local end_time=$(date +%s)
+    local total_elapsed=$((end_time - start_time))
+    local total_minutes=$((total_elapsed / 60))
+    local total_seconds=$((total_elapsed % 60))
+
+    echo ""
+
+    if [ "$completion_detected" = true ]; then
+        # Success!
+        log_completion "$((iteration - 1))" true
+
+        echo -e "${GREEN}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║                         ✓ COMPLETION SUCCESSFUL                            ║${NC}"
+        echo -e "${GREEN}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${GREEN}All tasks completed successfully!${NC}"
+        echo ""
+        echo "  Total Tasks Completed: $(jq '[.tasks[] | select(.passes == true)] | length' "$JSON_FILE") / $(jq '.tasks | length' "$JSON_FILE")"
+        echo "  Total Time: $(printf "%02d:%02d" $total_minutes $total_seconds)"
+        echo "  Iterations Used: $((iteration - 1)) / $MAX_ITERATIONS"
+        echo ""
+        echo "  Final PRD: $JSON_FILE"
+        echo "  Progress Log: $PROGRESS_FILE"
+        echo ""
+        echo -e "${GREEN}════════════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+
+        exit 0
+    else
+        # Max iterations reached
+        log_completion "$MAX_ITERATIONS" false
+
+        local completed_count=$(jq '[.tasks[] | select(.passes == true)] | length' "$JSON_FILE")
+        local total_count=$(jq '.tasks | length' "$JSON_FILE")
+        local incomplete_count=$((total_count - completed_count))
+
+        echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║                       MAX ITERATIONS REACHED                               ║${NC}"
+        echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${YELLOW}Ralph Loop stopped after $MAX_ITERATIONS iterations.${NC}"
+        echo ""
+        echo "  Tasks Completed: $completed_count / $total_count"
+        echo "  Tasks Remaining: $incomplete_count"
+        echo "  Total Time: $(printf "%02d:%02d" $total_minutes $total_seconds)"
+        echo ""
+        echo "Incomplete tasks:"
+
+        # List incomplete tasks
+        local task_index=0
+        while [ $task_index -lt $total_count ]; do
+            local task=$(jq ".tasks[$task_index]" "$JSON_FILE")
+            local task_passes=$(echo "$task" | jq -r '.passes')
+
+            if [ "$task_passes" = "false" ]; then
+                local task_id=$(echo "$task" | jq -r '.id')
+                local task_title=$(echo "$task" | jq -r '.title')
+                echo "  - $task_id: $task_title"
+            fi
+
+            task_index=$((task_index + 1))
+        done
+
+        echo ""
+        echo -e "${YELLOW}To continue, run:${NC}"
+        echo "  ./ralph-loop $PRD_FILE --resume --max-iterations $((MAX_ITERATIONS + 10))"
+        echo ""
+        echo "  Progress Log: $PROGRESS_FILE"
+        echo ""
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════════════════════${NC}"
+        echo ""
+
+        exit 1
+    fi
+}
+
+# Main entry point
+main() {
+    parse_arguments "$@"
+    validate_prd_file
+
+    # If we get here, all validation passed
+    if [ "$DEBUG" = true ]; then
+        echo -e "${BLUE}[DEBUG] Arguments parsed successfully${NC}"
+        echo -e "${BLUE}[DEBUG] PRD_FILE: $PRD_FILE${NC}"
+        echo -e "${BLUE}[DEBUG] MAX_ITERATIONS: $MAX_ITERATIONS${NC}"
+        echo -e "${BLUE}[DEBUG] VERBOSE: $VERBOSE${NC}"
+        echo -e "${BLUE}[DEBUG] DEBUG: $DEBUG${NC}"
+        echo -e "${BLUE}[DEBUG] RESUME: $RESUME${NC}"
+        echo -e "${BLUE}[DEBUG] ANALYZE_PRD: $ANALYZE_PRD${NC}"
+    fi
+
+    echo -e "${GREEN}✓${NC} Arguments validated successfully"
+    echo -e "${GREEN}✓${NC} PRD file exists and is readable: $PRD_FILE"
+
+    # Convert markdown to JSON if needed
+    convert_prd_to_json
+
+    # Validate PRD JSON structure
+    validate_prd_json "$JSON_FILE"
+    echo -e "${GREEN}✓${NC} PRD validation passed"
+
+    # If analyze mode, run analysis and exit
+    if [ "$ANALYZE_PRD" = true ]; then
+        echo ""
+        analyze_prd "$JSON_FILE"
+    fi
+
+    # Initialize progress file
+    initialize_progress_file
+
+    # Run the main Ralph Loop
+    run_ralph_loop
+}
+
+# Run main
+main "$@"

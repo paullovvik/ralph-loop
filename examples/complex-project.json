@@ -1,0 +1,159 @@
+{
+  "title": "E-commerce Search and Filtering System",
+  "overview": "Implement a comprehensive product search and filtering system with faceted search, sorting, and pagination for an e-commerce platform.",
+  "projectDirectory": "/Users/paul.lovvik/AI/Claude/ralph/examples",
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "Design Search Index Schema",
+      "category": "Data Architecture",
+      "priority": 1,
+      "description": "Design and implement the Elasticsearch index schema for product search with proper field mappings and analyzers.",
+      "acceptanceCriteria": [
+        "Create index mapping with fields: product_id, name, description, category, price, brand, tags, rating, in_stock",
+        "Configure text analyzers for name and description (standard, edge_ngram for autocomplete)",
+        "Set up keyword fields for exact matching on brand and category",
+        "Configure numeric fields for price and rating with proper sorting",
+        "Add created_at and updated_at timestamp fields",
+        "Test: Run `npm run test:search-schema` and verify index creation succeeds",
+        "Test: Bulk index 100 sample products and verify all fields indexed correctly"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-2",
+      "title": "Implement Search Query Builder",
+      "category": "Backend",
+      "priority": 2,
+      "description": "Build a flexible query builder that constructs Elasticsearch queries based on user search parameters.",
+      "acceptanceCriteria": [
+        "Accept search parameters: query text, category filters, price range, brand filters, rating minimum",
+        "Build multi_match query for text search across name and description",
+        "Add bool filters for category, brand, and in_stock status",
+        "Implement range filter for price and rating",
+        "Support multiple categories and brands (OR logic within type, AND between types)",
+        "Add boost scoring for exact matches in product name",
+        "Test: Run `npm run test:query-builder` and verify all test cases pass",
+        "Test: Generate query for complex search and verify correct structure"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-3",
+      "title": "Build Faceted Search Aggregations",
+      "category": "Backend",
+      "priority": 3,
+      "description": "Implement aggregations to provide filter options and counts for faceted search navigation.",
+      "acceptanceCriteria": [
+        "Add terms aggregation for categories with doc counts",
+        "Add terms aggregation for brands with doc counts",
+        "Add range aggregation for price buckets (0-25, 25-50, 50-100, 100-200, 200+)",
+        "Add stats aggregation for price (min, max, average)",
+        "Add rating histogram with counts for each star level",
+        "Aggregations respect active filters (show only available options)",
+        "Test: Run `npm run test:aggregations` and verify correct counts",
+        "Test: Search with filters applied and verify aggregations update correctly"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-4",
+      "title": "Implement Sorting and Pagination",
+      "category": "Backend",
+      "priority": 4,
+      "description": "Add sorting options and cursor-based pagination for efficient result navigation.",
+      "acceptanceCriteria": [
+        "Support sort options: relevance (default), price_asc, price_desc, rating_desc, newest",
+        "Implement cursor-based pagination using search_after",
+        "Accept page_size parameter (default 20, max 100)",
+        "Return total hit count and has_next_page indicator",
+        "Include sort values in response for next page cursor",
+        "Handle edge cases: empty results, last page, invalid cursors",
+        "Test: Run `npm run test:pagination` and verify all scenarios work",
+        "Test: Paginate through 500 products and verify no duplicates or gaps"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-5",
+      "title": "Create Search API Endpoint",
+      "category": "Backend",
+      "priority": 5,
+      "description": "Build the REST API endpoint that ties together search, filtering, aggregations, and pagination.",
+      "acceptanceCriteria": [
+        "POST /api/search endpoint accepts search parameters in request body",
+        "Validate all input parameters and return 400 for invalid requests",
+        "Call query builder, execute search, format response",
+        "Response includes: products array, facets object, pagination object, total count",
+        "Handle Elasticsearch errors gracefully with appropriate status codes",
+        "Add request logging and performance metrics",
+        "Test: Run `npm run test:search-api` and verify all endpoints work",
+        "Test: Send various search requests and verify response format matches spec"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-6",
+      "title": "Build Search UI Components",
+      "category": "Frontend",
+      "priority": 6,
+      "description": "Create React components for search interface including filters, results grid, and pagination.",
+      "acceptanceCriteria": [
+        "SearchBar component with text input and search button",
+        "FilterPanel component with checkboxes for categories, brands, price ranges",
+        "Show active filter count badges",
+        "ResultsGrid component displaying product cards",
+        "SortDropdown component for changing sort order",
+        "Pagination component with previous/next buttons and page indicator",
+        "Loading states for search in progress",
+        "Empty state when no results found",
+        "Test: Run `npm run test:ui-components` and verify all components render",
+        "Test: Open /search in browser and verify full interface works"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-7",
+      "title": "Implement Search State Management",
+      "category": "Frontend",
+      "priority": 7,
+      "description": "Build state management for search parameters, results, and UI state using Redux or Context API.",
+      "acceptanceCriteria": [
+        "Store search parameters: query, filters, sort, pagination cursor",
+        "Store search results: products, facets, total count, loading state",
+        "URL synchronization: update URL params when search state changes",
+        "Browser back/forward support using URL state",
+        "Debounce search text input (300ms)",
+        "Cancel in-flight requests when new search initiated",
+        "Persist active filters in session storage",
+        "Test: Run `npm run test:state-management` and verify state updates correctly",
+        "Test: Perform search, navigate away, use back button - verify state restores"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    }
+  ],
+  "metadata": {
+    "createdAt": "2026-01-27",
+    "estimatedComplexity": "High",
+    "totalTasks": 7,
+    "categories": {
+      "Data Architecture": 1,
+      "Backend": 4,
+      "Frontend": 2
+    }
+  }
+}

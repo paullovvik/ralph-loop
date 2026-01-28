@@ -1,0 +1,68 @@
+{
+  "title": "Converted PRD",
+  "overview": "Converted from markdown",
+  "projectDirectory": "/Users/paul.lovvik/AI/Claude/ralph",
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "Create Profile Data Model",
+      "category": "Backend",
+      "priority": 1,
+      "description": "Create the database schema and model classes for storing user profile information.",
+      "acceptanceCriteria": [
+        "Create users table with fields: id, name, email, bio, avatar_url, created_at, updated_at",
+        "Implement User model class with validation methods",
+        "Email field must validate email format",
+        "Bio field limited to 500 characters",
+        "Test: Run `npm test -- user-model.test.js` and verify all tests pass",
+        "Test: Database migration creates users table successfully"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 1
+    },
+    {
+      "id": "task-2",
+      "title": "Implement Profile API Endpoints",
+      "category": "Backend",
+      "priority": 2,
+      "description": "Build REST API endpoints for profile operations.",
+      "acceptanceCriteria": [
+        "GET /api/profile/:id returns user profile data",
+        "PUT /api/profile/:id updates user profile (authenticated users only)",
+        "Endpoint returns 404 if user not found",
+        "Endpoint returns 403 if user tries to edit another user's profile",
+        "Input validation rejects invalid email formats",
+        "Test: Run `npm test -- profile-api.test.js` and verify all tests pass",
+        "Test: Manual test with curl commands succeeds"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    },
+    {
+      "id": "task-3",
+      "title": "Build Profile Page UI",
+      "category": "Frontend",
+      "priority": 3,
+      "description": "Create the user interface for viewing and editing profiles.",
+      "acceptanceCriteria": [
+        "Display user name, email, bio, and avatar",
+        "Show \"Edit Profile\" button for profile owner only",
+        "Edit mode shows form with input fields",
+        "Save button calls API and shows success message",
+        "Cancel button reverts changes",
+        "Form validation shows inline errors",
+        "Test: Run `npm test -- profile-ui.test.js` and verify all tests pass",
+        "Test: Open browser to /profile/1 and verify page renders correctly"
+      ],
+      "passes": false,
+      "completedAt": null,
+      "attempts": 0
+    }
+  ],
+  "metadata": {
+    "createdAt": "2026-01-27",
+    "totalTasks": 3
+  }
+}

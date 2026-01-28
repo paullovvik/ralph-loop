@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Ralph Loop generated files
+progress.txt
+progress-*.txt
+*.json.bak
+*.md.bak
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Test output and temporary files
+output*.txt
+tmp-debug/
+test-loop.json
+test-loop.md
+test.md
+ralph-loop-tool-prd.json
+ralph-loop-tool-prd.md
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Coverage and test reports
+coverage/
+.nyc_output/
+*.lcov
