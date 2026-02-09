@@ -300,6 +300,84 @@ echo ""
 test_progress_no_archive_on_resume
 echo ""
 
+# Test 7: Completion detection after final iteration
+test_completion_detection_final_check() {
+    test_start "Final completion check detects when all tasks are complete"
+
+    local test_dir=$(mktemp -d)
+    local prd_file="$test_dir/test-completion-prd.json"
+    local progress_file="$test_dir/progress.txt"
+
+    # Create a PRD where all tasks are already complete
+    cat > "$prd_file" << 'EOF'
+{
+  "title": "Test PRD - All Complete",
+  "overview": "PRD with all tasks complete",
+  "projectDirectory": "/tmp",
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "Complete Task 1",
+      "category": "Testing",
+      "priority": 1,
+      "description": "Already completed",
+      "acceptanceCriteria": ["Done"],
+      "passes": true,
+      "completedAt": "2026-01-27",
+      "attempts": 1
+    },
+    {
+      "id": "task-2",
+      "title": "Complete Task 2",
+      "category": "Testing",
+      "priority": 2,
+      "description": "Already completed",
+      "acceptanceCriteria": ["Done"],
+      "passes": true,
+      "completedAt": "2026-01-27",
+      "attempts": 1
+    }
+  ],
+  "metadata": {
+    "createdAt": "2026-01-27",
+    "totalTasks": 2
+  }
+}
+EOF
+
+    # Run ralph-loop - should detect completion immediately
+    cd "$test_dir"
+    local output=$("$RALPH_LOOP" "$prd_file" --max-iterations 3 2>&1)
+    local exit_code=$?
+
+    # Check that it detected completion and exited with success
+    if [ $exit_code -eq 0 ]; then
+        test_pass "Exit code is 0 (success) when all tasks complete"
+    else
+        test_fail "Exit code is $exit_code, expected 0"
+    fi
+
+    # Check that completion message is shown
+    if echo "$output" | grep -q "COMPLETION SUCCESSFUL\|All tasks completed"; then
+        test_pass "Completion success message displayed"
+    else
+        test_fail "Missing completion success message"
+    fi
+
+    # Check that it doesn't show "MAX ITERATIONS REACHED"
+    if echo "$output" | grep -q "MAX ITERATIONS REACHED"; then
+        test_fail "Incorrectly showed MAX ITERATIONS REACHED for completed tasks"
+    else
+        test_pass "Did not show MAX ITERATIONS REACHED message"
+    fi
+
+    # Cleanup
+    rm -rf "$test_dir"
+}
+
+test_completion_detection_final_check
+echo ""
+
 # Summary
 echo "════════════════════════════════════════════════════════════════════════════"
 echo -e "${GREEN}Tests Passed: $TESTS_PASSED${NC}"

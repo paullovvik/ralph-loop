@@ -31,6 +31,7 @@ TEST_SCRIPTS=(
     "test-resume.sh"
     "test-help.sh"
     "test-analysis.sh"
+    "test-completion-detection.sh"
 )
 
 # Run each test suite

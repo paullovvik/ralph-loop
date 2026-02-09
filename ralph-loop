@@ -1298,6 +1298,18 @@ Try again later or check Claude API status at https://status.anthropic.com"
         fi
     done
 
+    # Final check: Verify if all tasks are actually complete before declaring success/failure
+    # This handles the case where the last iteration completed all tasks but didn't detect it
+    if [ "$completion_detected" = false ]; then
+        local remaining_tasks=$(jq '[.tasks[] | select(.passes == false)] | length' "$JSON_FILE")
+        if [ "$remaining_tasks" -eq 0 ]; then
+            if [ "$VERBOSE" = true ]; then
+                echo -e "${GREEN}[INFO] Final verification: All tasks are actually complete!${NC}"
+            fi
+            completion_detected=true
+        fi
+    fi
+
     # Final status
     local end_time=$(date +%s)
     local total_elapsed=$((end_time - start_time))
