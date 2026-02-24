@@ -516,7 +516,7 @@ Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
         fi
 
         # Check for duplicate priorities
-        if [[ " ${priorities[@]} " =~ " ${priority} " ]]; then
+        if [[ " ${priorities[@]+"${priorities[@]}"} " =~ " ${priority} " ]]; then
             error_exit "PRD validation failed: Duplicate priority value found: $priority" "Each task must have a unique priority number.
 Task '$task_id' has the same priority as another task.
 Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
