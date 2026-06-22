@@ -32,6 +32,7 @@ TEST_SCRIPTS=(
     "test-help.sh"
     "test-analysis.sh"
     "test-completion-detection.sh"
+    "test-model-selection.sh"
 )
 
 # Run each test suite

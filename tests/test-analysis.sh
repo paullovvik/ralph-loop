@@ -4,6 +4,10 @@
 
 set -e
 
+# Skip the planning stage in tests — analysis exits before planning anyway,
+# but kept consistent with other test files.
+export RALPH_LOOP_NO_PLAN=1
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,6 +15,9 @@ NC='\033[0m'
 
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RALPH_LOOP="$SCRIPT_DIR/../ralph-loop"
 
 # Helper functions
 pass() {
@@ -63,7 +70,7 @@ test_analyze_flag() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/analyze-test.json" --analyze-prd > "$TEST_DIR/analyze-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/analyze-test.json" --analyze-prd > "$TEST_DIR/analyze-output.txt" 2>&1 || true
 
     if grep -qi "analy" "$TEST_DIR/analyze-output.txt"; then
         pass "--analyze-prd flag triggers analysis"
@@ -84,7 +91,7 @@ test_validation_first() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/invalid-for-analysis.json" --analyze-prd > "$TEST_DIR/validation-first.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/invalid-for-analysis.json" --analyze-prd > "$TEST_DIR/validation-first.txt" 2>&1 || true
 
     if grep -qi "validation\|error\|invalid" "$TEST_DIR/validation-first.txt"; then
         pass "Validation runs before analysis"
@@ -124,7 +131,7 @@ test_statistics() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/stats-test.json" --analyze-prd > "$TEST_DIR/stats-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/stats-test.json" --analyze-prd > "$TEST_DIR/stats-output.txt" 2>&1 || true
 
     local has_stats=0
 
@@ -181,7 +188,7 @@ test_task_feedback() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/feedback-test.json" --analyze-prd > "$TEST_DIR/feedback-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/feedback-test.json" --analyze-prd > "$TEST_DIR/feedback-output.txt" 2>&1 || true
 
     if grep -qi "task-1\|task-2\|first task\|second task" "$TEST_DIR/feedback-output.txt"; then
         pass "Analysis provides per-task feedback"
@@ -212,7 +219,7 @@ test_exits_after_analysis() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/exit-test.json" --analyze-prd > "$TEST_DIR/exit-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/exit-test.json" --analyze-prd > "$TEST_DIR/exit-output.txt" 2>&1 || true
 
     # Should not contain iteration-related output
     if ! grep -qi "iteration.*1\|starting.*loop\|calling.*claude" "$TEST_DIR/exit-output.txt"; then
@@ -255,7 +262,7 @@ test_improvement_suggestions() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/vague-test.json" --analyze-prd > "$TEST_DIR/vague-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/vague-test.json" --analyze-prd > "$TEST_DIR/vague-output.txt" 2>&1 || true
 
     if grep -qi "vague\|specific\|improve\|suggest\|clarif\|more detail" "$TEST_DIR/vague-output.txt"; then
         pass "Analysis suggests improvements for vague criteria"
@@ -286,7 +293,7 @@ test_overall_recommendations() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/recommendations-test.json" --analyze-prd > "$TEST_DIR/recommendations-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/recommendations-test.json" --analyze-prd > "$TEST_DIR/recommendations-output.txt" 2>&1 || true
 
     if grep -qi "recommend\|overall\|summar\|conclusion" "$TEST_DIR/recommendations-output.txt"; then
         pass "Analysis includes overall recommendations"
@@ -323,7 +330,7 @@ test_well_written_prd() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/good-prd.json" --analyze-prd > "$TEST_DIR/good-output.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/good-prd.json" --analyze-prd > "$TEST_DIR/good-output.txt" 2>&1 || true
 
     if [ -s "$TEST_DIR/good-output.txt" ]; then
         pass "Analysis works with well-written PRD"
@@ -349,7 +356,7 @@ Description here.
 - Second criterion
 EOF
 
-    ../ralph-loop "$TEST_DIR/markdown-test.md" --analyze-prd > "$TEST_DIR/markdown-analysis.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/markdown-test.md" --analyze-prd > "$TEST_DIR/markdown-analysis.txt" 2>&1 || true
 
     if grep -qi "analy" "$TEST_DIR/markdown-analysis.txt"; then
         pass "Analysis works with markdown files"

@@ -1,0 +1,21 @@
+# ralph-loop configuration
+#
+# Copy to ~/.config/ralph-loop/config (or set $RALPH_LOOP_CONFIG to point
+# elsewhere). Sourced as bash. Each setting can be overridden on the command
+# line with the matching --flag.
+
+# Model tier the planner aims for. If a task cannot be implemented by this
+# tier, the planner splits it into smaller subtasks until each one fits.
+# One of: haiku, sonnet, opus. Default: sonnet.
+TARGET_MODEL=sonnet
+
+# Maximum tier the runtime will escalate a stuck task to. Must be >=
+# TARGET_MODEL. Once a task fails ESCALATION_THRESHOLD more attempts at the
+# cap, it is marked blocked and skipped.
+# One of: haiku, sonnet, opus. Default: opus.
+ESCALATION_CAP=opus
+
+# Failed attempts at the current tier before escalating one tier (or, at the
+# cap, before blocking the task).
+# Default: 3.
+ESCALATION_THRESHOLD=3

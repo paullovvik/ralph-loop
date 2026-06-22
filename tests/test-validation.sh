@@ -4,6 +4,10 @@
 
 set -e
 
+# Skip the planning stage in tests — these don't exercise it and would
+# otherwise make live Claude API calls.
+export RALPH_LOOP_NO_PLAN=1
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,6 +15,9 @@ NC='\033[0m'
 
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RALPH_LOOP="$SCRIPT_DIR/../ralph-loop"
 
 # Helper functions
 pass() {
@@ -53,7 +60,7 @@ test_required_top_level_fields() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/missing-title.json" > "$TEST_DIR/output1.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/missing-title.json" > "$TEST_DIR/output1.txt" 2>&1 || true
 
     if grep -qi "title" "$TEST_DIR/output1.txt" && \
        grep -qi "error\|missing\|required" "$TEST_DIR/output1.txt"; then
@@ -69,7 +76,7 @@ EOF
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/missing-tasks.json" > "$TEST_DIR/output2.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/missing-tasks.json" > "$TEST_DIR/output2.txt" 2>&1 || true
 
     if grep -qi "tasks" "$TEST_DIR/output2.txt" && \
        grep -qi "error\|missing\|required" "$TEST_DIR/output2.txt"; then
@@ -100,7 +107,7 @@ test_required_task_fields() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/missing-priority.json" > "$TEST_DIR/output3.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/missing-priority.json" > "$TEST_DIR/output3.txt" 2>&1 || true
 
     if grep -qi "priority" "$TEST_DIR/output3.txt" && \
        grep -qi "error\|missing\|required" "$TEST_DIR/output3.txt"; then
@@ -125,7 +132,7 @@ EOF
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/missing-criteria.json" > "$TEST_DIR/output4.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/missing-criteria.json" > "$TEST_DIR/output4.txt" 2>&1 || true
 
     if grep -qi "acceptance" "$TEST_DIR/output4.txt" && \
        grep -qi "error\|missing\|required" "$TEST_DIR/output4.txt"; then
@@ -165,7 +172,7 @@ test_unique_priorities() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/duplicate-priority.json" > "$TEST_DIR/output5.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/duplicate-priority.json" > "$TEST_DIR/output5.txt" 2>&1 || true
 
     if grep -qi "priority" "$TEST_DIR/output5.txt" && \
        grep -qi "duplicate\|unique" "$TEST_DIR/output5.txt"; then
@@ -196,7 +203,7 @@ test_empty_acceptance_criteria() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/empty-criteria.json" > "$TEST_DIR/output6.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/empty-criteria.json" > "$TEST_DIR/output6.txt" 2>&1 || true
 
     if grep -qi "acceptance" "$TEST_DIR/output6.txt" && \
        grep -qi "empty\|must have\|required" "$TEST_DIR/output6.txt"; then
@@ -234,7 +241,7 @@ test_error_messages() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/invalid-task.json" > "$TEST_DIR/output7.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/invalid-task.json" > "$TEST_DIR/output7.txt" 2>&1 || true
 
     if grep -qi "task-2\|Invalid Task" "$TEST_DIR/output7.txt"; then
         pass "Error message identifies specific task"
@@ -255,7 +262,7 @@ test_exit_code() {
 }
 EOF
 
-    if ../ralph-loop "$TEST_DIR/invalid.json" > /dev/null 2>&1; then
+    if "$RALPH_LOOP" "$TEST_DIR/invalid.json" > /dev/null 2>&1; then
         fail "Did not exit with non-zero code on invalid PRD"
     else
         pass "Exits with non-zero code on validation failure"
@@ -297,10 +304,10 @@ test_valid_prd() {
 }
 EOF
 
-    # Run with max-iterations 1 to prevent actual execution
-    ../ralph-loop "$TEST_DIR/valid.json" --max-iterations 1 > "$TEST_DIR/output8.txt" 2>&1 || true
+    # Use --analyze-prd to validate without calling Claude API
+    "$RALPH_LOOP" "$TEST_DIR/valid.json" --analyze-prd > "$TEST_DIR/output8.txt" 2>&1 || true
 
-    if ! grep -qi "validation.*error\|invalid" "$TEST_DIR/output8.txt"; then
+    if ! grep -qi "PRD validation failed" "$TEST_DIR/output8.txt"; then
         pass "Valid PRD passes validation"
     else
         fail "Valid PRD failed validation"
@@ -328,7 +335,7 @@ test_priority_type() {
 }
 EOF
 
-    ../ralph-loop "$TEST_DIR/string-priority.json" > "$TEST_DIR/output9.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/string-priority.json" > "$TEST_DIR/output9.txt" 2>&1 || true
 
     if grep -qi "priority" "$TEST_DIR/output9.txt" && \
        grep -qi "integer\|number\|invalid" "$TEST_DIR/output9.txt"; then

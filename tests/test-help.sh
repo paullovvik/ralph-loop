@@ -12,6 +12,9 @@ NC='\033[0m'
 TESTS_PASSED=0
 TESTS_FAILED=0
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RALPH_LOOP="$SCRIPT_DIR/../ralph-loop"
+
 # Helper functions
 pass() {
     echo -e "${GREEN}✓ PASS:${NC} $1"
@@ -46,7 +49,7 @@ test_help_flag() {
     echo ""
     echo "Test 1: --help flag triggers help output"
 
-    ../ralph-loop --help > "$TEST_DIR/help-output.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-output.txt" 2>&1 || true
 
     if [ -s "$TEST_DIR/help-output.txt" ]; then
         pass "--help flag produces output"
@@ -60,7 +63,7 @@ test_no_args() {
     echo ""
     echo "Test 2: No arguments triggers help output"
 
-    ../ralph-loop > "$TEST_DIR/no-args-output.txt" 2>&1 || true
+    "$RALPH_LOOP" > "$TEST_DIR/no-args-output.txt" 2>&1 || true
 
     if [ -s "$TEST_DIR/no-args-output.txt" ]; then
         pass "No arguments produces output"
@@ -74,7 +77,7 @@ test_introduction() {
     echo ""
     echo "Test 3: Help includes introduction"
 
-    ../ralph-loop --help > "$TEST_DIR/help-intro.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-intro.txt" 2>&1 || true
 
     if grep -qi "what is\|ralph loop\|introduction" "$TEST_DIR/help-intro.txt"; then
         pass "Help includes 'What is Ralph Loop?' introduction"
@@ -88,7 +91,7 @@ test_quick_start() {
     echo ""
     echo "Test 4: Help includes Quick Start Workflow"
 
-    ../ralph-loop --help > "$TEST_DIR/help-quickstart.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-quickstart.txt" 2>&1 || true
 
     if grep -qi "quick start\|workflow\|getting started" "$TEST_DIR/help-quickstart.txt"; then
         pass "Help includes Quick Start section"
@@ -102,7 +105,7 @@ test_usage_syntax() {
     echo ""
     echo "Test 5: Help displays usage syntax"
 
-    ../ralph-loop --help > "$TEST_DIR/help-usage.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-usage.txt" 2>&1 || true
 
     if grep -qi "usage:\|synopsis" "$TEST_DIR/help-usage.txt"; then
         pass "Help includes usage syntax"
@@ -116,7 +119,7 @@ test_option_descriptions() {
     echo ""
     echo "Test 6: Help documents all options"
 
-    ../ralph-loop --help > "$TEST_DIR/help-options.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-options.txt" 2>&1 || true
 
     local all_flags_present=true
 
@@ -138,7 +141,7 @@ test_usage_examples() {
     echo ""
     echo "Test 7: Help includes usage examples"
 
-    ../ralph-loop --help > "$TEST_DIR/help-examples.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-examples.txt" 2>&1 || true
 
     if grep -qi "example" "$TEST_DIR/help-examples.txt"; then
         local example_count=$(grep -ci "example" "$TEST_DIR/help-examples.txt")
@@ -157,7 +160,7 @@ test_prd_guidelines() {
     echo ""
     echo "Test 8: Help includes PRD writing guidelines"
 
-    ../ralph-loop --help > "$TEST_DIR/help-guidelines.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-guidelines.txt" 2>&1 || true
 
     if grep -qi "prd\|writing" "$TEST_DIR/help-guidelines.txt" && \
        grep -qi "guideline\|best practice\|how to write" "$TEST_DIR/help-guidelines.txt"; then
@@ -172,7 +175,7 @@ test_troubleshooting() {
     echo ""
     echo "Test 9: Help includes troubleshooting section"
 
-    ../ralph-loop --help > "$TEST_DIR/help-troubleshoot.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-troubleshoot.txt" 2>&1 || true
 
     if grep -qi "troubleshoot\|common.*error\|faq\|problem" "$TEST_DIR/help-troubleshoot.txt"; then
         pass "Help includes troubleshooting section"
@@ -186,7 +189,7 @@ test_tips_section() {
     echo ""
     echo "Test 10: Help includes tips for success"
 
-    ../ralph-loop --help > "$TEST_DIR/help-tips.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-tips.txt" 2>&1 || true
 
     if grep -qi "tip\|advice\|recommendation\|success" "$TEST_DIR/help-tips.txt"; then
         pass "Help includes tips for success"
@@ -200,7 +203,7 @@ test_files_created() {
     echo ""
     echo "Test 11: Help lists files that will be created"
 
-    ../ralph-loop --help > "$TEST_DIR/help-files.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-files.txt" 2>&1 || true
 
     if grep -q "progress.txt" "$TEST_DIR/help-files.txt" || \
        grep -qi "files.*created\|output.*files" "$TEST_DIR/help-files.txt"; then
@@ -215,7 +218,7 @@ test_troubleshooting_coverage() {
     echo ""
     echo "Test 12: Troubleshooting covers key scenarios"
 
-    ../ralph-loop --help > "$TEST_DIR/help-troubleshoot-detail.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-troubleshoot-detail.txt" 2>&1 || true
 
     local coverage_count=0
 
@@ -243,7 +246,7 @@ test_flag_examples() {
     echo ""
     echo "Test 13: Help includes examples for major flags"
 
-    ../ralph-loop --help > "$TEST_DIR/help-flag-examples.txt" 2>&1 || true
+    "$RALPH_LOOP" --help > "$TEST_DIR/help-flag-examples.txt" 2>&1 || true
 
     local flag_example_count=0
 

@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Skip the planning stage in tests — these don't exercise it and would
+# otherwise make live Claude API calls.
+export RALPH_LOOP_NO_PLAN=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RALPH_LOOP="$SCRIPT_DIR/../ralph-loop"
 TEST_DIR="$SCRIPT_DIR/tmp-progress-test"

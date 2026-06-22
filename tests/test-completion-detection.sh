@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Skip the planning stage in tests — these don't exercise it and would
+# otherwise make live Claude API calls.
+export RALPH_LOOP_NO_PLAN=1
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'

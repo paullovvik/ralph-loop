@@ -4,6 +4,10 @@
 
 set -e
 
+# Skip the planning stage in tests — these don't exercise it and would
+# otherwise make live Claude API calls.
+export RALPH_LOOP_NO_PLAN=1
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -11,6 +15,9 @@ NC='\033[0m'
 
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RALPH_LOOP="$SCRIPT_DIR/../ralph-loop"
 
 # Helper functions
 pass() {
@@ -57,7 +64,7 @@ test_file_type_detection() {
 EOF
 
     # Run with markdown file
-    ../ralph-loop "$TEST_DIR/test.md" > "$TEST_DIR/output1.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/test.md" > "$TEST_DIR/output1.txt" 2>&1 || true
 
     if [ -f "$TEST_DIR/test.json" ]; then
         pass "Markdown file detected and converted to JSON"
@@ -68,7 +75,7 @@ EOF
     # Run with JSON file - should not create another file
     json_mtime_before=$(stat -f %m "$TEST_DIR/test.json" 2>/dev/null || echo "0")
     sleep 1
-    ../ralph-loop "$TEST_DIR/test.json" --verbose > "$TEST_DIR/output2.txt" 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/test.json" --verbose > "$TEST_DIR/output2.txt" 2>&1 || true
     json_mtime_after=$(stat -f %m "$TEST_DIR/test.json" 2>/dev/null || echo "0")
 
     if grep -q "Input is already JSON format" "$TEST_DIR/output2.txt" || \
@@ -103,7 +110,7 @@ Description text here.
 - Another criterion
 EOF
 
-    ../ralph-loop "$TEST_DIR/parse-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/parse-test.md" > /dev/null 2>&1 || true
 
     if [ -f "$TEST_DIR/parse-test.json" ]; then
         # Check if JSON has 2 tasks
@@ -168,7 +175,7 @@ test_task_ids() {
 - Criterion
 EOF
 
-    ../ralph-loop "$TEST_DIR/ids-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/ids-test.md" > /dev/null 2>&1 || true
 
     if [ -f "$TEST_DIR/ids-test.json" ]; then
         if grep -q '"id": "task-1"' "$TEST_DIR/ids-test.json" && \
@@ -197,7 +204,7 @@ test_task_initialization() {
 - Criterion
 EOF
 
-    ../ralph-loop "$TEST_DIR/init-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/init-test.md" > /dev/null 2>&1 || true
 
     if [ -f "$TEST_DIR/init-test.json" ]; then
         if grep -q '"passes": false' "$TEST_DIR/init-test.json"; then
@@ -237,7 +244,7 @@ EOF
 
     cp "$TEST_DIR/preserve-test.md" "$TEST_DIR/preserve-test-backup.md"
 
-    ../ralph-loop "$TEST_DIR/preserve-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/preserve-test.md" > /dev/null 2>&1 || true
 
     if diff -q "$TEST_DIR/preserve-test.md" "$TEST_DIR/preserve-test-backup.md" > /dev/null; then
         pass "Original markdown file preserved unchanged"
@@ -260,7 +267,7 @@ test_use_existing_json() {
 EOF
 
     # First conversion
-    ../ralph-loop "$TEST_DIR/existing-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/existing-test.md" > /dev/null 2>&1 || true
 
     # Modify the JSON
     if [ -f "$TEST_DIR/existing-test.json" ]; then
@@ -268,7 +275,7 @@ EOF
         sed -i.bak 's/"Converted PRD"/"Modified JSON"/' "$TEST_DIR/existing-test.json"
 
         # Run again
-        ../ralph-loop "$TEST_DIR/existing-test.md" > /dev/null 2>&1 || true
+        "$RALPH_LOOP" "$TEST_DIR/existing-test.md" > /dev/null 2>&1 || true
 
         # Check if the modification is still there
         if grep -q '"Modified JSON"' "$TEST_DIR/existing-test.json"; then
@@ -298,7 +305,7 @@ Task description here.
 - Second criterion
 EOF
 
-    ../ralph-loop "$TEST_DIR/fields-test.md" > /dev/null 2>&1 || true
+    "$RALPH_LOOP" "$TEST_DIR/fields-test.md" > /dev/null 2>&1 || true
 
     if [ -f "$TEST_DIR/fields-test.json" ]; then
         local all_present=true

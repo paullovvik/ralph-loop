@@ -15,6 +15,21 @@ PRD_FILE=""
 JSON_FILE=""
 PROGRESS_FILE=""
 
+# Model selection: empty until resolved from config + CLI
+TARGET_MODEL=""
+ESCALATION_CAP=""
+ESCALATION_THRESHOLD=""
+NO_PLAN=false
+# RALPH_LOOP_NO_PLAN=1 in the env is equivalent to passing --no-plan. Lets test
+# environments and CI opt out of the planning stage without per-call flags.
+case "${RALPH_LOOP_NO_PLAN:-}" in
+    1|true|yes) NO_PLAN=true ;;
+esac
+CONFIG_FILE="${RALPH_LOOP_CONFIG:-${HOME}/.config/ralph-loop/config}"
+DEFAULT_TARGET_MODEL="sonnet"
+DEFAULT_ESCALATION_CAP="opus"
+DEFAULT_ESCALATION_THRESHOLD=3
+
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -62,11 +77,25 @@ REQUIRED ARGUMENTS:
 
 OPTIONS:
   --max-iterations N      Maximum iterations to run (default: 15)
+  --target-model TIER     Model tier the planner aims for (haiku|sonnet|opus,
+                          default: sonnet). Tasks that don't fit are split.
+  --escalation-cap TIER   Maximum tier the runtime will escalate a stuck task
+                          to (haiku|sonnet|opus, default: opus).
+  --escalation-threshold N
+                          Failed attempts at the current tier before bumping
+                          up one tier (or blocking, at the cap). Default: 3.
+  --no-plan               Skip the planning stage; stamp every task with the
+                          target model and run as-is.
   --verbose               Show detailed progress and API metadata
   --debug                 Show full Claude output and internal state
   --resume                Resume from last checkpoint in progress.txt
   --analyze-prd           Analyze PRD quality and suggest improvements
   --help                  Show this help message
+
+CONFIG FILE:
+  ~/.config/ralph-loop/config (or \$RALPH_LOOP_CONFIG) — sourced as bash.
+  Sets defaults for TARGET_MODEL, ESCALATION_CAP, ESCALATION_THRESHOLD.
+  CLI flags override config values. See examples/config.example.
 
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║                             EXAMPLES                                       ║
@@ -188,6 +217,78 @@ error_exit() {
     exit 1
 }
 
+# Load configuration file (sourced as bash). Sets TARGET_MODEL, ESCALATION_CAP,
+# ESCALATION_THRESHOLD if not already set on the CLI.
+load_config_file() {
+    if [ -f "$CONFIG_FILE" ]; then
+        # shellcheck source=/dev/null
+        if ! source "$CONFIG_FILE"; then
+            error_exit "Failed to source config file: $CONFIG_FILE" "Check the file for syntax errors. Set RALPH_LOOP_CONFIG to override the location."
+        fi
+        if [ "$DEBUG" = true ]; then
+            echo -e "${BLUE}[DEBUG] Loaded config from $CONFIG_FILE${NC}"
+        fi
+    fi
+}
+
+# Map a tier name to the claude CLI --model identifier.
+tier_to_id() {
+    case "$1" in
+        haiku)  echo "claude-haiku-4-5" ;;
+        sonnet) echo "claude-sonnet-4-6" ;;
+        opus)   echo "claude-opus-4-8" ;;
+        *) error_exit "Unknown model tier: $1" "Use one of: haiku, sonnet, opus" ;;
+    esac
+}
+
+# Numeric rank for tier comparison (higher = more powerful).
+tier_rank() {
+    case "$1" in
+        haiku)  echo 1 ;;
+        sonnet) echo 2 ;;
+        opus)   echo 3 ;;
+        *) error_exit "Unknown model tier: $1" "Use one of: haiku, sonnet, opus" ;;
+    esac
+}
+
+# Next tier up (opus is its own next).
+next_tier() {
+    case "$1" in
+        haiku)  echo "sonnet" ;;
+        sonnet) echo "opus" ;;
+        opus)   echo "opus" ;;
+        *) error_exit "Unknown model tier: $1" "Use one of: haiku, sonnet, opus" ;;
+    esac
+}
+
+validate_tier() {
+    case "$1" in
+        haiku|sonnet|opus) return 0 ;;
+        *) error_exit "Invalid model tier: $1" "Use one of: haiku, sonnet, opus" ;;
+    esac
+}
+
+# Apply defaults for any unset model settings and validate the final values.
+resolve_model_settings() {
+    : "${TARGET_MODEL:=$DEFAULT_TARGET_MODEL}"
+    : "${ESCALATION_CAP:=$DEFAULT_ESCALATION_CAP}"
+    : "${ESCALATION_THRESHOLD:=$DEFAULT_ESCALATION_THRESHOLD}"
+
+    validate_tier "$TARGET_MODEL"
+    validate_tier "$ESCALATION_CAP"
+
+    if ! [[ "$ESCALATION_THRESHOLD" =~ ^[1-9][0-9]*$ ]]; then
+        error_exit "ESCALATION_THRESHOLD must be a positive integer (got: $ESCALATION_THRESHOLD)" "Set in $CONFIG_FILE or pass --escalation-threshold N"
+    fi
+
+    local target_rank cap_rank
+    target_rank=$(tier_rank "$TARGET_MODEL")
+    cap_rank=$(tier_rank "$ESCALATION_CAP")
+    if [ "$target_rank" -gt "$cap_rank" ]; then
+        error_exit "TARGET_MODEL ($TARGET_MODEL) cannot be higher than ESCALATION_CAP ($ESCALATION_CAP)" "Lower --target-model or raise --escalation-cap."
+    fi
+}
+
 # Parse command-line arguments
 parse_arguments() {
     # Check if no arguments provided
@@ -229,6 +330,31 @@ parse_arguments() {
                 ;;
             --analyze-prd)
                 ANALYZE_PRD=true
+                shift
+                ;;
+            --target-model)
+                if [ -z "${2:-}" ]; then
+                    error_exit "--target-model requires an argument (haiku, sonnet, or opus)" "Example: ./ralph-loop my-prd.md --target-model sonnet"
+                fi
+                TARGET_MODEL="$2"
+                shift 2
+                ;;
+            --escalation-cap)
+                if [ -z "${2:-}" ]; then
+                    error_exit "--escalation-cap requires an argument (haiku, sonnet, or opus)" "Example: ./ralph-loop my-prd.md --escalation-cap opus"
+                fi
+                ESCALATION_CAP="$2"
+                shift 2
+                ;;
+            --escalation-threshold)
+                if [ -z "${2:-}" ]; then
+                    error_exit "--escalation-threshold requires a numeric argument" "Example: ./ralph-loop my-prd.md --escalation-threshold 3"
+                fi
+                ESCALATION_THRESHOLD="$2"
+                shift 2
+                ;;
+            --no-plan)
+                NO_PLAN=true
                 shift
                 ;;
             -*)
@@ -543,6 +669,128 @@ Run './ralph-loop --analyze-prd $PRD_FILE' for detailed feedback."
     fi
 
     return 0
+}
+
+# Plan tasks for model fit. Reads JSON_FILE, asks Claude to stamp every task
+# with a model tier (haiku/sonnet/opus) <= TARGET_MODEL, splitting any task
+# that doesn't fit the target tier into smaller subtasks. Idempotent: tasks
+# that already have a non-null .model field are left as-is, so the planner
+# is a no-op on resume and on JSON files the user has hand-tagged.
+plan_tasks_with_models() {
+    local json_file="$1"
+
+    # Idempotency check — every task already tagged?
+    local needs_planning
+    needs_planning=$(jq -r '[.tasks[] | (has("model") and (.model != null))] | all | not' "$json_file")
+    if [ "$needs_planning" = "false" ]; then
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] All tasks already have model assignments — skipping planning.${NC}"
+        fi
+        return 0
+    fi
+
+    # --no-plan escape hatch: just stamp target on anything missing model.
+    if [ "$NO_PLAN" = true ]; then
+        local stamped
+        stamped=$(jq --arg m "$TARGET_MODEL" '.tasks |= map(if (has("model") and .model != null) then . else . + {model: $m} end)' "$json_file")
+        echo "$stamped" > "$json_file"
+        if [ "$VERBOSE" = true ]; then
+            echo -e "${BLUE}[INFO] --no-plan: stamped target model ($TARGET_MODEL) on tasks without one.${NC}"
+        fi
+        return 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║                     PLANNING TASKS FOR MODEL FIT                           ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${BLUE}Target tier: $TARGET_MODEL  (escalation cap: $ESCALATION_CAP)${NC}"
+    echo ""
+
+    if ! command -v claude &> /dev/null; then
+        error_exit "Claude CLI is not available. Required for planning stage." "Install Claude CLI, or pass --no-plan to skip planning."
+    fi
+
+    local prd_content
+    prd_content=$(cat "$json_file")
+
+    # The planner runs at the cap tier so its output is as accurate as possible —
+    # planner errors cascade through the entire run, so we don't skimp here.
+    local planner_model_id
+    planner_model_id=$(tier_to_id "$ESCALATION_CAP")
+
+    local planner_prompt="You are the planning stage of ralph-loop. Your job is to ensure every task in the PRD can be implemented by Claude at the TARGET model tier or below.
+
+TARGET MODEL TIER: $TARGET_MODEL
+
+MODEL CAPABILITIES (rough guide):
+  - haiku  : small mechanical changes, single-file edits, well-specified tweaks
+  - sonnet : typical feature work, multi-file changes with clear scope
+  - opus   : ambiguous design work, cross-cutting refactors, deep reasoning
+
+INSTRUCTIONS:
+1. Read the PRD JSON below.
+2. For each task, decide whether it can be implemented by the TARGET tier ($TARGET_MODEL) or a LOWER tier.
+   - If yes: stamp it with the appropriate tier (the lowest tier that comfortably handles it).
+   - If no (the task requires a tier ABOVE $TARGET_MODEL): SPLIT the task into smaller subtasks until each subtask fits the target tier or below. Preserve the original intent across the splits. Give each subtask a derivative id (e.g. task-3 → task-3a, task-3b) and a clearly-scoped title and acceptance criteria.
+3. Tasks that already have a non-null \"model\" field MUST be left untouched (no re-splitting, no re-tagging).
+4. Renumber priorities so they remain unique integers; preserve original ordering. Subtasks of a split task should occupy consecutive priorities.
+5. Output ONLY the updated JSON document — no markdown fences, no commentary, no preamble. Just the JSON.
+
+Each task in the output must have these fields: id, title, category, priority, description, acceptanceCriteria, passes (false), completedAt (null), attempts (0), model (one of: haiku, sonnet, opus — never above $TARGET_MODEL unless the task already had a model set).
+
+PRD JSON:
+$prd_content"
+
+    local prompt_file
+    prompt_file=$(mktemp)
+    echo "$planner_prompt" > "$prompt_file"
+
+    if [ "$DEBUG" = true ]; then
+        echo -e "${BLUE}[DEBUG] Planner model: $planner_model_id${NC}"
+        echo -e "${BLUE}[DEBUG] Planner prompt written to $prompt_file${NC}"
+    fi
+
+    local planner_output
+    if ! planner_output=$(claude --model "$planner_model_id" --print < "$prompt_file" 2>&1); then
+        rm -f "$prompt_file"
+        error_exit "Planning stage failed: claude CLI returned an error" "Output: $planner_output
+
+Pass --no-plan to skip the planning stage."
+    fi
+    rm -f "$prompt_file"
+
+    # Strip any accidental code fencing the model may have added despite instructions.
+    planner_output=$(echo "$planner_output" | sed -E '/^[[:space:]]*```(json)?[[:space:]]*$/d')
+
+    if ! echo "$planner_output" | jq '.' > /dev/null 2>&1; then
+        error_exit "Planning stage produced invalid JSON" "First 500 chars of output:
+${planner_output:0:500}
+
+Re-run, or pass --no-plan to skip planning."
+    fi
+
+    # Verify every task has a valid model at or below the cap.
+    local cap_rank
+    cap_rank=$(tier_rank "$ESCALATION_CAP")
+    local invalid_count
+    invalid_count=$(echo "$planner_output" | jq --argjson cap "$cap_rank" '
+        def trank(t): if t == "haiku" then 1 elif t == "sonnet" then 2 elif t == "opus" then 3 else 99 end;
+        [.tasks[] | select((.model | type) != "string" or (trank(.model) > $cap) or (trank(.model) > 3))] | length')
+    if [ "$invalid_count" != "0" ]; then
+        error_exit "Planner produced $invalid_count task(s) with missing/invalid model or model above cap ($ESCALATION_CAP)" "Re-run, raise --escalation-cap, or pass --no-plan."
+    fi
+
+    # Persist (pretty-printed via jq).
+    echo "$planner_output" | jq '.' > "$json_file"
+
+    local task_count
+    task_count=$(jq '.tasks | length' "$json_file")
+    echo -e "${GREEN}✓${NC} Planning complete: $task_count tasks tagged with models"
+    if [ "$VERBOSE" = true ]; then
+        jq -r '.tasks[] | "  - \(.id) [\(.model)] (priority \(.priority)) \(.title)"' "$json_file"
+    fi
+    echo ""
 }
 
 # Analyze PRD quality using Claude API
@@ -951,28 +1199,11 @@ show_progress() {
     echo ""
 }
 
-# Find highest-priority incomplete task
+# Find highest-priority incomplete, unblocked task
 find_next_task() {
-    local prd_content=$(cat "$JSON_FILE")
-    local task_count=$(echo "$prd_content" | jq '.tasks | length')
-    local task_index=0
-    local highest_priority_task=""
-    local highest_priority=999999
-
-    while [ $task_index -lt $task_count ]; do
-        local task=$(echo "$prd_content" | jq ".tasks[$task_index]")
-        local task_passes=$(echo "$task" | jq -r '.passes')
-        local task_priority=$(echo "$task" | jq -r '.priority')
-
-        if [ "$task_passes" = "false" ] && [ "$task_priority" -lt "$highest_priority" ]; then
-            highest_priority=$task_priority
-            highest_priority_task=$(echo "$task" | jq -r '.id')
-        fi
-
-        task_index=$((task_index + 1))
-    done
-
-    echo "$highest_priority_task"
+    jq -r '[.tasks[] | select(.passes == false and (.blocked // false) == false)]
+           | sort_by(.priority)
+           | .[0].id // empty' "$JSON_FILE"
 }
 
 # Get task details by ID
@@ -1043,16 +1274,28 @@ run_ralph_loop() {
         local next_task_id=$(find_next_task)
 
         if [ -z "$next_task_id" ]; then
-            # All tasks complete!
-            if [ "$VERBOSE" = true ]; then
-                echo -e "${GREEN}[INFO] All tasks completed!${NC}"
+            # Nothing actionable remains. Distinguish "all passed" from "rest are blocked".
+            local remaining_failing
+            remaining_failing=$(jq '[.tasks[] | select(.passes == false)] | length' "$JSON_FILE")
+            if [ "$remaining_failing" -eq 0 ]; then
+                if [ "$VERBOSE" = true ]; then
+                    echo -e "${GREEN}[INFO] All tasks completed!${NC}"
+                fi
+                completion_detected=true
+            else
+                local blocked_count
+                blocked_count=$(jq '[.tasks[] | select((.blocked // false) == true)] | length' "$JSON_FILE")
+                echo -e "${YELLOW}[INFO] No actionable tasks remain ($blocked_count blocked, $remaining_failing total unfinished). Stopping.${NC}"
             fi
-            completion_detected=true
             break
         fi
 
         local task_details=$(get_task_details "$next_task_id")
         local task_title=$(echo "$task_details" | jq -r '.title')
+        local task_model
+        task_model=$(echo "$task_details" | jq -r --arg fallback "$TARGET_MODEL" '.model // $fallback')
+        local task_model_id
+        task_model_id=$(tier_to_id "$task_model")
 
         # Update task attempts
         update_task_attempts "$next_task_id"
@@ -1061,7 +1304,7 @@ run_ralph_loop() {
         log_iteration "$iteration" "$next_task_id" "$task_title"
 
         if [ "$VERBOSE" = true ]; then
-            echo -e "${BLUE}[INFO] Working on: $next_task_id - $task_title${NC}"
+            echo -e "${BLUE}[INFO] Working on: $next_task_id - $task_title  [model: $task_model]${NC}"
         fi
 
         # Generate Claude prompt
@@ -1114,7 +1357,7 @@ run_ralph_loop() {
                     echo ""
                 fi
                 echo -e "${BLUE}[DEBUG] Calling Claude API...${NC}"
-                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                if claude_output=$(claude --dangerously-skip-permissions --model "$task_model_id" --print < "$prompt_file" 2>&1); then
                     api_success=true
                     echo ""
                     echo -e "${BLUE}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -1137,14 +1380,14 @@ run_ralph_loop() {
                     echo ""
                 fi
                 echo -e "${BLUE}[VERBOSE] Calling Claude API...${NC}"
-                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                if claude_output=$(claude --dangerously-skip-permissions --model "$task_model_id" --print < "$prompt_file" 2>&1); then
                     api_success=true
                     echo -e "${GREEN}[VERBOSE] Claude API call completed${NC}"
                 else
                     claude_exit_code=$?
                 fi
             else
-                if claude_output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1); then
+                if claude_output=$(claude --dangerously-skip-permissions --model "$task_model_id" --print < "$prompt_file" 2>&1); then
                     api_success=true
                 else
                     claude_exit_code=$?
@@ -1281,6 +1524,41 @@ Try again later or check Claude API status at https://status.anthropic.com"
             log_iteration_result "$iteration" "$next_task_id" "PASSED" "Task completed successfully"
         else
             log_iteration_result "$iteration" "$next_task_id" "IN PROGRESS" "Task still being worked on"
+
+            # Escalation: every ESCALATION_THRESHOLD failed attempts at the
+            # current tier, bump up one tier (capped at ESCALATION_CAP). When
+            # already at the cap, mark the task blocked so it stops draining
+            # the global iteration budget.
+            local task_attempts
+            task_attempts=$(echo "$updated_task" | jq -r '.attempts')
+            if [ "$task_attempts" -gt 0 ] && [ $((task_attempts % ESCALATION_THRESHOLD)) -eq 0 ]; then
+                local current_rank cap_rank
+                current_rank=$(tier_rank "$task_model")
+                cap_rank=$(tier_rank "$ESCALATION_CAP")
+
+                if [ "$current_rank" -lt "$cap_rank" ]; then
+                    local new_tier
+                    new_tier=$(next_tier "$task_model")
+                    # Don't overshoot the cap (only matters if cap == sonnet and current == haiku → next is sonnet, fine)
+                    if [ "$(tier_rank "$new_tier")" -gt "$cap_rank" ]; then
+                        new_tier="$ESCALATION_CAP"
+                    fi
+                    local updated_json
+                    updated_json=$(jq --arg id "$next_task_id" --arg m "$new_tier" \
+                        '(.tasks[] | select(.id == $id) | .model) = $m' "$JSON_FILE")
+                    echo "$updated_json" > "$JSON_FILE"
+                    echo -e "${YELLOW}↑ Escalating $next_task_id: $task_model → $new_tier (after $task_attempts failed attempts)${NC}"
+                    log_iteration_result "$iteration" "$next_task_id" "ESCALATED" "Bumped model tier from $task_model to $new_tier after $task_attempts attempts"
+                else
+                    # Already at the cap — block the task and move on
+                    local updated_json
+                    updated_json=$(jq --arg id "$next_task_id" \
+                        '(.tasks[] | select(.id == $id) | .blocked) = true' "$JSON_FILE")
+                    echo "$updated_json" > "$JSON_FILE"
+                    echo -e "${RED}✗ Blocking $next_task_id: at escalation cap ($ESCALATION_CAP) after $task_attempts failed attempts${NC}"
+                    log_iteration_result "$iteration" "$next_task_id" "BLOCKED" "Reached escalation cap ($ESCALATION_CAP) with $task_attempts failed attempts"
+                fi
+            fi
         fi
 
         # Show progress visualization
@@ -1389,7 +1667,9 @@ Try again later or check Claude API status at https://status.anthropic.com"
 
 # Main entry point
 main() {
+    load_config_file
     parse_arguments "$@"
+    resolve_model_settings
     validate_prd_file
 
     # If we get here, all validation passed
@@ -1419,6 +1699,9 @@ main() {
         analyze_prd "$JSON_FILE"
     fi
 
+    # Tag every task with a model tier (split anything that doesn't fit target).
+    plan_tasks_with_models "$JSON_FILE"
+
     # Initialize progress file
     initialize_progress_file
 
@@ -1426,5 +1709,7 @@ main() {
     run_ralph_loop
 }
 
-# Run main
-main "$@"
+# Run main only when invoked directly (not when sourced for testing)
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
